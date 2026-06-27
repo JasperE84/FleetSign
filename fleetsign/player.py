@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import subprocess
 import threading
@@ -70,7 +71,7 @@ def select_next(items: list[MediaItem], now: datetime, last_id: Optional[str]) -
 
 def mpv_args(socket_path: str, input_conf: str, hwdec: str) -> list[str]:
     return [
-        "mpv", "--idle=yes", "--force-window=yes", "--fullscreen",
+        "mpv", "--idle=yes", "--force-window=yes", "--fullscreen", "--ontop",
         f"--hwdec={hwdec}", "--no-osc", "--no-input-default-bindings",
         "--really-quiet", "--image-display-duration=inf",
         "--cursor-autohide=always",
@@ -80,7 +81,20 @@ def mpv_args(socket_path: str, input_conf: str, hwdec: str) -> list[str]:
 
 
 def default_launcher(socket_path: str, input_conf: str, hwdec: str) -> subprocess.Popen:
-    return subprocess.Popen(mpv_args(socket_path, input_conf, hwdec))
+    # Run mpv as an X11 client so --ontop is actually honored. A native Wayland
+    # client cannot pin itself above other windows (no protocol for it), so a
+    # terminal raised over the fullscreen signage would stay in front until mpv
+    # is relaunched. Under XWayland mpv's --ontop sets the X11 _NET_WM_STATE_ABOVE
+    # hint, which labwc keeps above other windows once install.sh's
+    # allowAlwaysOnTop rule permits it. Clearing WAYLAND_DISPLAY routes mpv
+    # through XWayland on a Wayland session and is a no-op on a real X11 session
+    # (the var is unset there) — one launch path covers both desktops. DISPLAY is
+    # defaulted because the systemd --user environment imports WAYLAND_DISPLAY but
+    # not necessarily DISPLAY; :0 is the XWayland/Xorg display on a single-screen Pi.
+    env = dict(os.environ)
+    env.pop("WAYLAND_DISPLAY", None)
+    env.setdefault("DISPLAY", ":0")
+    return subprocess.Popen(mpv_args(socket_path, input_conf, hwdec), env=env)
 
 
 def _default_connector(socket_path: str) -> MpvIpc:
@@ -144,24 +158,33 @@ class PlayerController:
                 pass
 
     def set_maintenance(self, on: bool) -> None:
+        was = self._maintenance
         self._maintenance = on
         if on:
-            # Enter: drop the live mpv out of fullscreen and pause it so the
-            # operator can reach the desktop. Cheap, and keeps the same mpv up.
+            # Enter: drop the live mpv out of fullscreen, clear always-on-top, and
+            # pause it so the operator can both reach and see the desktop. Without
+            # clearing ontop the windowed mpv would keep floating above everything.
+            # Cheap, idempotent (safe on a duplicate "Enter maintenance"), and keeps
+            # the same mpv up.
             if self._ipc:
                 try:
                     self._ipc.command("set_property", "fullscreen", False)
+                    self._ipc.command("set_property", "ontop", False)
                     self._ipc.command("set_property", "pause", True)
                 except Exception:
                     pass
-        else:
-            # Exit: relaunch a fresh fullscreen mpv rather than re-fullscreening
-            # the live one. Re-entering fullscreen recreates mpv's video-output
-            # window, and the loadfile the player thread fires immediately after
-            # lands mid-recreation — a race that hangs mpv on the Pi compositor
-            # (its IPC socket then dies -> BrokenPipeError, black screen). See
-            # mpv issues #3678 / #9704. A clean relaunch is mpv's reliable boot
-            # path: it sequences window-create -> first decode internally.
+        elif was:
+            # Exit, but only on a real True->False transition. "Resume signage" is
+            # always shown in the UI, so a stray click or duplicate POST while
+            # already playing must NOT relaunch mpv and needlessly black/restart the
+            # wall (the dedicated "Restart playback" control is for that).
+            # Relaunch a fresh fullscreen mpv rather than re-fullscreening the live
+            # one: re-entering fullscreen recreates mpv's video-output window, and
+            # the loadfile the player thread fires immediately after lands
+            # mid-recreation — a race that hangs mpv on the Pi compositor (its IPC
+            # socket then dies -> BrokenPipeError, black screen). See mpv issues
+            # #3678 / #9704. A clean relaunch is mpv's reliable boot path: it
+            # sequences window-create -> first decode internally.
             self.restart_playback()
 
     def restart_playback(self) -> None:
@@ -186,10 +209,19 @@ class PlayerController:
                     self._proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     # A mpv hung in the GPU/compositor (e.g. wedged mid video-output
-                    # reinit) ignores SIGTERM. SIGKILL it so we never leave a stale
-                    # black fullscreen window up while _ensure_mpv launches a fresh
-                    # one behind it.
+                    # reinit) ignores SIGTERM. SIGKILL it, then wait() again to reap
+                    # it: if we returned without reaping, _ensure_mpv could map a
+                    # fresh window while the killed one's surface is still up (the
+                    # stale-black-window symptom) and leave a zombie behind. If even
+                    # SIGKILL doesn't land in time (mpv stuck in an uninterruptible
+                    # GPU/IO wait), log it — a brief double window is the visible cost.
                     self._proc.kill()
+                    try:
+                        self._proc.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        logging.getLogger(__name__).warning(
+                            "mpv did not exit after SIGKILL; relaunch may briefly "
+                            "overlap a stale window")
             except Exception:
                 pass
             self._proc = None
@@ -242,8 +274,12 @@ class PlayerController:
             if maint != self._maintenance:
                 self._maintenance = maint
                 if maint:
-                    # Entered maintenance (operator pressed F12 to leave fullscreen): pause.
+                    # Entered maintenance (operator pressed F12 to leave fullscreen):
+                    # clear always-on-top so the windowed mpv stops covering the
+                    # desktop, and pause. (Exiting relaunches a fresh mpv, which
+                    # comes back fullscreen + --ontop, so no live restore here.)
                     try:
+                        self._ipc.command("set_property", "ontop", False)
                         self._ipc.command("set_property", "pause", maint)
                     except Exception:
                         pass

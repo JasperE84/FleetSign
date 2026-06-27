@@ -97,6 +97,9 @@ Walk through these once after installing:
   a wrong year (`< 2024`), the unsynced-clock warning appears.
 - Press **F12** → mpv leaves fullscreen and pauses; press again (or "Resume
   signage") → fullscreen returns. **Reboot** → comes back fullscreen automatically.
+- With signage playing, open a terminal or other window over it → the signage
+  **stays in front** (it runs always-on-top). If a window can cover it, see the
+  always-on-top note under Troubleshooting.
 - **Reboot the Pi and log in (or let it auto-login)** → the player starts on its own
   (via `~/.config/labwc/autostart`); you should not need to start it by hand.
 - `systemctl --user kill -s SIGKILL fleetsign` → systemd restarts it within ~3 s and
@@ -159,6 +162,14 @@ rm -rf ~/fleetsign           # removes media, playlist/state, and config — bac
   libcuda.so.1"). In the web UI open **Settings → Video decoder** and pick
   **auto-copy** (the default) or **no** (pure software); playback restarts
   automatically when you change it.
+- **A terminal or other window covers the signage.** The player keeps mpv
+  always-on-top by running it under **XWayland** (a native Wayland window cannot
+  pin itself on top) together with a labwc window rule. If a window can still sit
+  in front: confirm `~/.config/labwc/rc.xml` contains a `windowRule` for `mpv`
+  with `allowAlwaysOnTop="yes"` (re-running `install.sh` adds it), then reload the
+  compositor with `pkill -HUP labwc` or log out and back in. Check `pgrep -a
+  Xwayland` shows XWayland is running; if video regressed at the same time, it is
+  the XWayland render path — switch the decoder in **Settings → Video decoder**.
 - **Video plays with sound when it shouldn't (or vice-versa).** Toggle "mute videos"
   in Settings (default is muted).
 - **Can't reach `http://<pi-ip>:8080`.** Read the address shown in the screen's

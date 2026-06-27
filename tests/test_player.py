@@ -58,6 +58,15 @@ def test_set_maintenance_unfullscreens(tmp_path):
     assert ("set_property", "fullscreen", False) in ctrl._ipc.calls
     assert ("set_property", "pause", True) in ctrl._ipc.calls
 
+def test_set_maintenance_drops_ontop_on_enter(tmp_path):
+    # Entering maintenance must clear always-on-top too, else the windowed mpv
+    # keeps floating above the desktop the operator is trying to use.
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+    ctrl._ipc = FakeIpc()
+    ctrl.set_maintenance(True)
+    assert ("set_property", "ontop", False) in ctrl._ipc.calls
+
 def test_set_maintenance_exit_relaunches_not_refullscreen(tmp_path):
     # Resuming from maintenance must NOT re-fullscreen the live mpv: re-entering
     # fullscreen recreates mpv's video-output window and the loadfile that follows
@@ -73,6 +82,16 @@ def test_set_maintenance_exit_relaunches_not_refullscreen(tmp_path):
     assert ctrl._restart.is_set()  # exit asks the player thread to relaunch
     assert ("set_property", "fullscreen", True) not in ctrl._ipc.calls
 
+def test_set_maintenance_resume_when_off_does_not_relaunch(tmp_path):
+    # "Resume signage" is always shown in the UI, so clicking it (or a duplicate
+    # POST) while already playing must NOT relaunch mpv — only a real True->False
+    # transition does.
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+    ctrl._ipc = FakeIpc()
+    ctrl.set_maintenance(False)            # already off (default state)
+    assert ctrl._restart.is_set() is False
+
 def test_pump_event_tracks_fullscreen(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
     ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
@@ -86,6 +105,7 @@ def test_pump_event_tracks_fullscreen(tmp_path):
     ctrl._pump_event(0.01)
     assert ctrl.is_maintenance() is True
     assert ("set_property", "pause", True) in ctrl._ipc.calls  # F12 enter pauses
+    assert ("set_property", "ontop", False) in ctrl._ipc.calls  # ...and drops on-top
     ctrl._ipc = EvIpc({"event": "property-change", "name": "fullscreen", "data": True})
     ctrl._pump_event(0.01)
     assert ctrl.is_maintenance() is False
@@ -108,6 +128,31 @@ def test_teardown_kills_mpv_that_ignores_terminate(tmp_path):
     ctrl._proc = proc
     ctrl._teardown_mpv()
     assert proc.terminated and proc.killed
+    assert ctrl._proc is None
+
+def test_teardown_reaps_after_kill(tmp_path):
+    # After SIGKILL the player must wait() again to reap the process, so _run can't
+    # launch a new mpv while the killed one's window still lingers (and so we don't
+    # leak a zombie). The normal case: SIGTERM ignored -> kill -> reaped.
+    import subprocess
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+
+    class StubbornProc:
+        def __init__(self): self.terminated = self.killed = False; self.waits = 0
+        def terminate(self): self.terminated = True
+        def kill(self): self.killed = True
+        def wait(self, timeout=None):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("mpv", timeout)  # ignores SIGTERM
+            return 0                                             # reaped after SIGKILL
+
+    proc = StubbornProc()
+    ctrl._proc = proc
+    ctrl._teardown_mpv()
+    assert proc.terminated and proc.killed
+    assert proc.waits == 2   # waited again after kill to reap it
     assert ctrl._proc is None
 
 def test_format_ip_overlay_with_ip():
@@ -135,12 +180,29 @@ def test_mpv_args_carries_hwdec():
     assert "--hwdec=auto-copy" in args
     assert "--hwdec=auto" not in args  # plain auto blue-screens video on the Pi
 
+def test_mpv_args_pins_window_on_top():
+    # mpv must launch always-on-top so a raised terminal can't sit in front of the
+    # signage; this is honored only via XWayland (see default_launcher).
+    assert "--ontop" in mpv_args("/sock", "/conf.conf", "auto-copy")
+
 def test_default_launcher_passes_hwdec(monkeypatch):
     captured = {}
     monkeypatch.setattr("fleetsign.player.subprocess.Popen",
-                        lambda a: captured.setdefault("args", a))
+                        lambda a, env=None: captured.setdefault("args", a))
     default_launcher("/sock", "/conf.conf", "no")
     assert "--hwdec=no" in captured["args"]
+
+def test_default_launcher_forces_xwayland(monkeypatch):
+    # --ontop is a no-op for a native Wayland client, so the launcher runs mpv
+    # under XWayland by clearing WAYLAND_DISPLAY and ensuring DISPLAY is set. On a
+    # real X11 session WAYLAND_DISPLAY is absent already, so this is a no-op there.
+    captured = {}
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr("fleetsign.player.subprocess.Popen",
+                        lambda a, env=None: captured.update(args=a, env=env))
+    default_launcher("/sock", "/conf.conf", "auto-copy")
+    assert "WAYLAND_DISPLAY" not in captured["env"]
+    assert captured["env"].get("DISPLAY")
 
 def test_write_input_conf_binds_f12(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)

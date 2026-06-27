@@ -10,6 +10,7 @@ set -euo pipefail
 APP_DIR="$HOME/fleetsign"
 UNIT="$HOME/.config/systemd/user/fleetsign.service"
 LABWC_AUTOSTART="$HOME/.config/labwc/autostart"
+LABWC_RC="$HOME/.config/labwc/rc.xml"
 
 # Stop the running player before removing its unit (so systemctl can find it).
 systemctl --user stop fleetsign.service 2>/dev/null || true
@@ -27,6 +28,14 @@ fi
 if [ -f "$LABWC_AUTOSTART" ] && grep -q "fleetsign.service" "$LABWC_AUTOSTART"; then
     sed -i '/# Start the FleetSign player (systemd --user manages restarts)/,+2d' "$LABWC_AUTOSTART"
     echo "Removed FleetSign block from $LABWC_AUTOSTART"
+fi
+
+# Strip the always-on-top window rule install.sh injected. Other windowRules are
+# left alone; an emptied <windowRules> block (or the minimal rc.xml we may have
+# seeded, which still loads labwc's default keybinds) is harmless.
+if [ -f "$LABWC_RC" ] && grep -q 'identifier="mpv"' "$LABWC_RC"; then
+    sed -i '/identifier="mpv"/d' "$LABWC_RC"
+    echo "Removed FleetSign window rule from $LABWC_RC"
 fi
 
 # Remove the virtualenv (an install artifact, not user content).

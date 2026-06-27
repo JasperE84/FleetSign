@@ -30,9 +30,51 @@ if ! grep -q "fleetsign.service" "$LABWC_AUTOSTART" 2>/dev/null; then
     {
         echo ""
         echo "# Start the FleetSign player (systemd --user manages restarts)"
-        echo "systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR 2>/dev/null"
+        echo "systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY 2>/dev/null"
         echo "systemctl --user start fleetsign.service"
     } >> "$LABWC_AUTOSTART"
+fi
+
+# Keep the signage window above other windows. On Wayland a client cannot pin
+# itself on top, so the player runs mpv under XWayland (see default_launcher in
+# fleetsign/player.py); labwc disallows X11 always-on-top requests by default, so
+# opt mpv in with a window rule. Seed rc.xml from the system default (or a minimal
+# file that still loads the default keybinds — labwc keeps its defaults when no
+# <keybind> entries are present), then inject the rule once.
+LABWC_RC="$HOME/.config/labwc/rc.xml"
+mkdir -p "$(dirname "$LABWC_RC")"
+if [ ! -f "$LABWC_RC" ]; then
+    if [ -f /etc/xdg/labwc/rc.xml ]; then
+        cp /etc/xdg/labwc/rc.xml "$LABWC_RC"
+    else
+        cat > "$LABWC_RC" <<'XML'
+<?xml version="1.0"?>
+<labwc_config>
+  <keyboard>
+    <default />
+  </keyboard>
+</labwc_config>
+XML
+    fi
+fi
+if ! grep -q 'identifier="mpv"' "$LABWC_RC"; then
+    RULE='    <windowRule identifier="mpv" allowAlwaysOnTop="yes" />'
+    if grep -q '<windowRules>' "$LABWC_RC"; then
+        sed -i "s#<windowRules>#<windowRules>\n${RULE}#" "$LABWC_RC"
+    elif grep -q '</labwc_config>' "$LABWC_RC"; then
+        sed -i "s#</labwc_config>#  <windowRules>\n${RULE}\n  </windowRules>\n</labwc_config>#" "$LABWC_RC"
+    elif grep -q '</openbox_config>' "$LABWC_RC"; then
+        sed -i "s#</openbox_config>#  <windowRules>\n${RULE}\n  </windowRules>\n</openbox_config>#" "$LABWC_RC"
+    fi
+fi
+
+# If labwc is the running compositor, reload it (SIGHUP = reconfigure) so the new
+# window rule is loaded before we start the player below, letting the fresh mpv map
+# always-on-top without a relogin. Verified with pgrep, not assumed: when labwc
+# isn't up (e.g. installing over SSH from a console) this is skipped and the rule
+# takes effect on the next login, exactly like the autostart hook above.
+if pgrep -x labwc >/dev/null 2>&1; then
+    pkill -HUP labwc 2>/dev/null || true
 fi
 
 # Start now for this session; the labwc autostart handles subsequent logins/reboots.

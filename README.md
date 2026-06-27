@@ -4,7 +4,7 @@
 
 ![Platform: Linux](https://img.shields.io/badge/platform-Raspberry%20Pi%20%7C%20Debian%20%7C%20Ubuntu-c51a4a)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Tests: 124 passing](https://img.shields.io/badge/tests-124%20passing-success)
+![Tests: 133 passing](https://img.shields.io/badge/tests-133%20passing-success)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)
 
 FleetSign turns a small Linux box — a Raspberry Pi, or any Debian/Ubuntu
@@ -43,8 +43,9 @@ content: lobbies, retail, offices, classrooms, events, menus.
 - Upload **large videos** (up to 4 GiB) straight from the browser.
 - **Blank / resume** the screen and **restart playback** on demand.
 - **Maintenance mode** (web button or **F12** on the Pi) drops mpv out of
-  fullscreen and pauses so you can use the desktop; a reboot always returns to
-  fullscreen signage.
+  fullscreen and pauses so you can use the desktop; **Resume signage** (or F12
+  again) brings playback cleanly back to fullscreen, and a reboot always returns
+  to fullscreen signage.
 - Each screen shows its own `http://<ip>:<port>` address small in the
   bottom-right corner, so you can always find its web UI.
 - A clock panel warns when the Pi's time looks unset (it has no battery-backed
@@ -68,6 +69,8 @@ content: lobbies, retail, offices, classrooms, events, menus.
   rather than crashing.
 - The player tolerates bad data — one malformed entry can never black out the
   display.
+- The signage window stays **always-on-top**, so a stray terminal or dialog
+  can't slip in front of the display.
 
 ---
 
@@ -267,7 +270,7 @@ interactions are dependency-injected, so the suite runs on any platform
 (including Windows/CI).
 
 ```bash
-python -m pytest                         # full suite (~124 tests)
+python -m pytest                         # full suite (~133 tests)
 python -m pytest tests/test_store.py -v   # one file
 python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv for real playback)
 ```
