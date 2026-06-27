@@ -145,20 +145,34 @@ class PlayerController:
 
     def set_maintenance(self, on: bool) -> None:
         self._maintenance = on
-        if self._ipc:
-            try:
-                self._ipc.command("set_property", "fullscreen", not on)
-                self._ipc.command("set_property", "pause", on)
-            except Exception:
-                pass
+        if on:
+            # Enter: drop the live mpv out of fullscreen and pause it so the
+            # operator can reach the desktop. Cheap, and keeps the same mpv up.
+            if self._ipc:
+                try:
+                    self._ipc.command("set_property", "fullscreen", False)
+                    self._ipc.command("set_property", "pause", True)
+                except Exception:
+                    pass
+        else:
+            # Exit: relaunch a fresh fullscreen mpv rather than re-fullscreening
+            # the live one. Re-entering fullscreen recreates mpv's video-output
+            # window, and the loadfile the player thread fires immediately after
+            # lands mid-recreation — a race that hangs mpv on the Pi compositor
+            # (its IPC socket then dies -> BrokenPipeError, black screen). See
+            # mpv issues #3678 / #9704. A clean relaunch is mpv's reliable boot
+            # path: it sequences window-create -> first decode internally.
+            self.restart_playback()
 
     def restart_playback(self) -> None:
-        # Called from Waitress worker threads (the restart button, an hwdec
-        # change). DON'T tear mpv down here: that nulls _ipc/_proc while the
-        # player thread is parked in _play_item's inner loop, which then can
-        # never satisfy an exit condition and busy-spins forever, leaving the
-        # screen black. Instead signal the player thread, which owns mpv, to
-        # relaunch on its next loop iteration.
+        # Request a fresh mpv relaunch (restart button, an hwdec change, or
+        # exiting maintenance). May be called from a Waitress worker thread or
+        # from the player thread itself. Either way DON'T tear mpv down here:
+        # that nulls _ipc/_proc while the player thread is parked in
+        # _play_item's inner loop, which then can never satisfy an exit
+        # condition and busy-spins forever, leaving the screen black. Instead
+        # signal the player thread, which owns mpv, to relaunch on its next loop
+        # iteration.
         self._restart.set()
 
     def _teardown_mpv(self) -> None:
@@ -168,6 +182,14 @@ class PlayerController:
         if self._proc:
             try:
                 self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    # A mpv hung in the GPU/compositor (e.g. wedged mid video-output
+                    # reinit) ignores SIGTERM. SIGKILL it so we never leave a stale
+                    # black fullscreen window up while _ensure_mpv launches a fresh
+                    # one behind it.
+                    self._proc.kill()
             except Exception:
                 pass
             self._proc = None
@@ -219,10 +241,17 @@ class PlayerController:
             maint = not bool(ev.get("data", True))
             if maint != self._maintenance:
                 self._maintenance = maint
-                try:
-                    self._ipc.command("set_property", "pause", maint)
-                except Exception:
-                    pass
+                if maint:
+                    # Entered maintenance (operator pressed F12 to leave fullscreen): pause.
+                    try:
+                        self._ipc.command("set_property", "pause", maint)
+                    except Exception:
+                        pass
+                else:
+                    # Exited (F12 back to fullscreen): relaunch fresh rather than
+                    # reusing the just-recreated window — same loadfile-mid-recreation
+                    # hang as the web Resume path. See set_maintenance().
+                    self.restart_playback()
         return ev
 
     def _play_item(self, item: MediaItem) -> None:

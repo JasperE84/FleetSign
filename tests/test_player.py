@@ -56,22 +56,59 @@ def test_set_maintenance_unfullscreens(tmp_path):
     ctrl.set_maintenance(True)
     assert ctrl.is_maintenance() is True
     assert ("set_property", "fullscreen", False) in ctrl._ipc.calls
+    assert ("set_property", "pause", True) in ctrl._ipc.calls
+
+def test_set_maintenance_exit_relaunches_not_refullscreen(tmp_path):
+    # Resuming from maintenance must NOT re-fullscreen the live mpv: re-entering
+    # fullscreen recreates mpv's video-output window and the loadfile that follows
+    # lands mid-recreation, hanging mpv on the Pi (BrokenPipeError, black screen,
+    # mpv #3678/#9704). Resume instead relaunches a fresh fullscreen mpv.
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+    ctrl._ipc = FakeIpc()
+    ctrl.set_maintenance(True)
+    ctrl._ipc.calls.clear()
+    ctrl.set_maintenance(False)
+    assert ctrl.is_maintenance() is False
+    assert ctrl._restart.is_set()  # exit asks the player thread to relaunch
+    assert ("set_property", "fullscreen", True) not in ctrl._ipc.calls
 
 def test_pump_event_tracks_fullscreen(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
     ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
 
     class EvIpc:
-        def __init__(self, ev): self.ev = ev
+        def __init__(self, ev): self.ev = ev; self.calls = []
         def get_event(self, timeout): return self.ev
-        def command(self, *a, **k): pass
+        def command(self, *a, **k): self.calls.append(a)
 
     ctrl._ipc = EvIpc({"event": "property-change", "name": "fullscreen", "data": False})
     ctrl._pump_event(0.01)
     assert ctrl.is_maintenance() is True
+    assert ("set_property", "pause", True) in ctrl._ipc.calls  # F12 enter pauses
     ctrl._ipc = EvIpc({"event": "property-change", "name": "fullscreen", "data": True})
     ctrl._pump_event(0.01)
     assert ctrl.is_maintenance() is False
+    assert ctrl._restart.is_set()  # F12 exit relaunches, not a live re-fullscreen
+
+def test_teardown_kills_mpv_that_ignores_terminate(tmp_path):
+    # A GPU/compositor-hung mpv ignores SIGTERM; teardown must SIGKILL it so the
+    # loop never relaunches a second mpv behind a stale black fullscreen window.
+    import subprocess
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+
+    class HungProc:
+        def __init__(self): self.terminated = False; self.killed = False
+        def terminate(self): self.terminated = True
+        def wait(self, timeout=None): raise subprocess.TimeoutExpired("mpv", timeout)
+        def kill(self): self.killed = True
+
+    proc = HungProc()
+    ctrl._proc = proc
+    ctrl._teardown_mpv()
+    assert proc.terminated and proc.killed
+    assert ctrl._proc is None
 
 def test_format_ip_overlay_with_ip():
     s = format_ip_overlay("192.168.1.50", 8080)
