@@ -110,3 +110,78 @@ def test_write_input_conf_binds_f12(tmp_path):
     ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
     ctrl._write_input_conf()
     assert (tmp_path / "input.conf").read_text("utf-8").strip() == "F12 cycle fullscreen"
+
+
+def test_restart_playback_unblocks_play_item(tmp_path):
+    # Regression: restart_playback() is called from Waitress worker threads while
+    # the player thread is parked in _play_item's inner loop (the common case —
+    # the player spends almost all its time waiting out an image/video). If
+    # restart tears mpv down cross-thread, _play_item must still exit promptly so
+    # _run can relaunch mpv; otherwise the loop busy-spins forever and the screen
+    # stays black until something else kicks it.
+    import threading, time
+    media = tmp_path / "media"; media.mkdir()
+    (media / "a.png").write_bytes(b"x")
+    store = PlaylistStore(tmp_path / "manifest.json", media)
+    store.add_media("a.png")
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+
+    class SlowIpc:
+        def command(self, *a, timeout=5.0): return {"error": "success"}
+        def get_event(self, timeout):
+            time.sleep(timeout or 0)   # emulate mpv: block, then no event
+            return None
+        def close(self): pass
+
+    class AliveProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    ctrl._ipc = SlowIpc()
+    ctrl._proc = AliveProc()
+
+    done = threading.Event()
+    threading.Thread(
+        target=lambda: (ctrl._play_item(store.list_media()[0]), done.set()),
+        daemon=True,
+    ).start()
+    time.sleep(0.2)             # let it settle into the inner loop
+    ctrl.restart_playback()     # called from "another thread", like a web worker
+    assert done.wait(2.0), "play_item did not return after restart_playback"
+
+
+def test_restart_playback_relaunches_via_run_loop(tmp_path):
+    # restart_playback() must cause mpv to be relaunched. With the player thread
+    # owning teardown, the request is serviced on the next _run iteration.
+    import time
+    media = tmp_path / "media"; media.mkdir()
+    (media / "a.png").write_bytes(b"x")
+    store = PlaylistStore(tmp_path / "manifest.json", media)
+    store.add_media("a.png")
+
+    launches = []
+
+    class DummyProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    class QuietIpc:
+        def command(self, *a, timeout=5.0): return {"error": "success"}
+        def get_event(self, timeout):
+            time.sleep(timeout or 0)
+            return None
+        def close(self): pass
+
+    def launcher(*a):
+        launches.append(1)
+        return DummyProc()
+
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"),
+                            launcher=launcher, connector=lambda *a: QuietIpc())
+    ctrl.start()
+    time.sleep(0.4)
+    assert len(launches) == 1
+    ctrl.restart_playback()
+    time.sleep(0.6)
+    ctrl.stop()
+    assert len(launches) >= 2, "restart_playback did not relaunch mpv"

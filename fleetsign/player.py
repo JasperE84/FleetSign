@@ -110,6 +110,7 @@ class PlayerController:
         self._blank = False
         self._maintenance = False
         self._stop = threading.Event()
+        self._restart = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -152,7 +153,13 @@ class PlayerController:
                 pass
 
     def restart_playback(self) -> None:
-        self._teardown_mpv()
+        # Called from Waitress worker threads (the restart button, an hwdec
+        # change). DON'T tear mpv down here: that nulls _ipc/_proc while the
+        # player thread is parked in _play_item's inner loop, which then can
+        # never satisfy an exit condition and busy-spins forever, leaving the
+        # screen black. Instead signal the player thread, which owns mpv, to
+        # relaunch on its next loop iteration.
+        self._restart.set()
 
     def _teardown_mpv(self) -> None:
         if self._ipc:
@@ -230,6 +237,10 @@ class PlayerController:
             self._ipc.command("set_property", "image-display-duration", dur)
         self._ipc.command("loadfile", str(self.store.media_dir / item.filename), "replace")
         while not self._stop.is_set():
+            # Bail back to _run on a restart request (it owns teardown/relaunch)
+            # or if mpv is gone, so we never spin against a dead/None ipc.
+            if self._restart.is_set() or self._ipc is None:
+                return
             ev = self._pump_event(0.5)
             if ev and ev.get("event") == "end-file":
                 return
@@ -241,6 +252,11 @@ class PlayerController:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
+                if self._restart.is_set():
+                    # Serviced here, on the thread that owns mpv, so teardown +
+                    # relaunch never races a web worker's restart_playback().
+                    self._restart.clear()
+                    self._teardown_mpv()
                 self._ensure_mpv()
                 self._update_ip_overlay()
                 if self._maintenance:
@@ -248,7 +264,12 @@ class PlayerController:
                     continue
                 if self._blank:
                     self._ipc.command("stop")
-                    self._stop.wait(0.5)
+                    # Drain instead of sleeping: the stop above emits an end-file
+                    # event. Left in the queue it would be consumed by the first
+                    # _play_item after un-blanking, which would return instantly
+                    # on the stale event — the "half a second of video then blank"
+                    # flash on resume. Pumping it here keeps resume clean.
+                    self._pump_event(0.5)
                     continue
                 item = select_next(self.store.list_media(), self._clock(), self._last_id)
                 if item is None:

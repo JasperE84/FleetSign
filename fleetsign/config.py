@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,11 @@ class AppConfig:
     port: int
     master_url: str = ""
     sync_token: str = ""
+    # Serializes save() across threads. On a slave the SyncClient thread writes
+    # config (set_password_hash) concurrently with operator actions on Waitress
+    # workers; without this they could race the same temp file and os.replace.
+    _save_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     @classmethod
     def load_or_create(cls, root: Path, host: str = "0.0.0.0", port: int = 8080) -> "AppConfig":
@@ -92,6 +98,13 @@ class AppConfig:
             "master_url": self.master_url,
             "sync_token": self.sync_token,
         }
-        tmp = self.config_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(d, indent=2), "utf-8")
-        os.replace(tmp, self.config_path)
+        blob = json.dumps(d, indent=2)
+        # Serialize under a lock so the temp file has a single writer, then swap
+        # it in atomically. Same discipline as the store's _save for
+        # manifest.json (one lock guarding the write); without it the SyncClient
+        # thread's set_password_hash could race a Waitress worker, garbling the
+        # shared temp or racing os.replace into a FileNotFoundError.
+        with self._save_lock:
+            tmp = self.config_path.with_suffix(".json.tmp")
+            tmp.write_text(blob, "utf-8")
+            os.replace(tmp, self.config_path)

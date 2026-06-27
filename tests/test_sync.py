@@ -409,6 +409,60 @@ def test_non_dict_media_entry_fails(tmp_path):
         assert store.list_media() == []        # store not mutated
 
 
+def test_bad_media_type_fails_whole_manifest(tmp_path):
+    # The threat model treats the master's manifest as hostile (token-auth, no
+    # TLS). A tampered/buggy `type` is the dangerous field: _play_item only sets
+    # image-display-duration when type == "image", so an actual image arriving
+    # with any other type gets mpv's default --image-display-duration=inf and
+    # never advances -- the playlist stalls with no end-file. Reject the whole
+    # manifest rather than persist an item the player can't advance past.
+    store, media = make_store(tmp_path)
+    for bad_type in ("evil", "", "Image", 5, None):
+        item = dict(ITEM_A, type=bad_type)
+        p = payload_for([item], {"a.png": {"size": 3, "mtime": 1000.0}})
+        client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+        res = client.sync_once()
+        assert res.ok is False, f"bad type {bad_type!r} was accepted"
+        assert store.list_media() == []  # store not mutated
+
+
+def test_bad_media_fields_fail_whole_manifest(tmp_path):
+    store, media = make_store(tmp_path)
+    bad_items = [
+        dict(ITEM_A, enabled="yes"),              # non-bool
+        dict(ITEM_A, image_duration="soon"),      # non-numeric
+        dict(ITEM_A, image_duration=0),           # not strictly positive
+        dict(ITEM_A, image_duration=-4),          # negative
+        dict(ITEM_A, image_duration=float("inf")),  # non-finite
+        dict(ITEM_A, id=""),                      # empty id
+        dict(ITEM_A, id=7),                       # non-string id
+    ]
+    for item in bad_items:
+        p = payload_for([item], {"a.png": {"size": 3, "mtime": 1000.0}})
+        client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+        res = client.sync_once()
+        assert res.ok is False, f"bad item accepted: {item!r}"
+        assert store.list_media() == []
+
+
+def test_good_media_with_duration_and_video_still_syncs(tmp_path):
+    # Guard against over-validation: legitimate items (a video, an image with a
+    # real duration) must still pass.
+    store, media = make_store(tmp_path)
+    good = [
+        dict(ITEM_A, type="image", image_duration=12.0),
+        {"id": "v1", "filename": "clip.mp4", "type": "video",
+         "enabled": False, "image_duration": None, "schedule": None},
+    ]
+    p = payload_for(good, {"a.png": {"size": 3, "mtime": 1000.0},
+                           "clip.mp4": {"size": 3, "mtime": 1000.0}})
+    client = SyncClient(store, cfg(),
+                        fetch=make_fetch(p, {"a.png": b"abc", "clip.mp4": b"xyz"}))
+    res = client.sync_once()
+    assert res.ok is True
+    assert [m.filename for m in store.list_media()] == ["a.png", "clip.mp4"]
+
+
 def test_non_dict_settings_skips(tmp_path):
     store, media = make_store(tmp_path)
     for bad_settings in (None, ["default_image_duration", 8]):

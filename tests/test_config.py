@@ -64,3 +64,50 @@ def test_become_master_clears_url(tmp_path):
     cfg.become_master()
     assert cfg.is_slave() is False
     assert AppConfig.load_or_create(tmp_path).master_url == ""
+
+
+def test_save_is_serialized_under_lock(tmp_path, monkeypatch):
+    # On a slave the SyncClient thread (set_password_hash) writes config
+    # concurrently with operator actions on Waitress workers. save() shares a
+    # fixed config.json.tmp, so two unsynchronized writers garble that temp or
+    # race os.replace (FileNotFoundError / a torn file going live). The fix
+    # serializes save() under a lock. Probe os.replace to assert no two saves are
+    # ever in the critical section at once -- deterministic on any platform,
+    # unlike asserting on filesystem-race outcomes.
+    import json
+    import threading
+    import time
+    import fleetsign.config as configmod
+
+    cfg = AppConfig.load_or_create(tmp_path)
+    real_replace = configmod.os.replace
+    gate = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def probe_replace(src, dst):
+        nonlocal active, max_active
+        with gate:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.005)  # widen the window so an unlocked overlap is caught
+        with gate:
+            active -= 1
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(configmod.os, "replace", probe_replace)
+
+    def hammer(tag):
+        for i in range(5):
+            cfg.set_password_hash(f"hash-{tag}-{i}")
+
+    threads = [threading.Thread(target=hammer, args=(t,)) for t in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert max_active == 1, f"save() ran concurrently (peak {max_active})"
+    # And the live file is always valid JSON, with no shared temp left behind.
+    json.loads((tmp_path / "data" / "config.json").read_text("utf-8"))
+    assert not (tmp_path / "data" / "config.json.tmp").exists()

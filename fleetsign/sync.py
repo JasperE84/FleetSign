@@ -141,14 +141,28 @@ class SyncClient:
                     raise ValueError(f"media entry is not an object: {m!r}")
             media = [MediaItem.from_dict(m) for m in raw_media]
             # Validate every item up-front, before touching the filesystem: the
-            # filename must be a safe basename and must carry sound numeric
-            # size/mtime metadata. Reject the WHOLE manifest otherwise — never
-            # silently skip an item (that would add a fileless playlist entry and
-            # shield a stale local copy from pruning) and never let a "../" name
-            # or a wrong-typed mtime reach the write/os.utime path.
+            # filename must be a safe basename, the item's own fields must be
+            # sound, and it must carry numeric size/mtime metadata. Reject the
+            # WHOLE manifest otherwise — never silently skip an item (that would
+            # add a fileless playlist entry and shield a stale local copy from
+            # pruning) and never let a "../" name or a wrong-typed mtime reach
+            # the write/os.utime path. The item fields matter because the player
+            # trusts them: a non-"image" type on an actual image skips the
+            # image-display-duration set, so mpv's default `inf` stalls the
+            # playlist with no end-file to advance on.
             for m in media:
                 if not _is_safe_media_name(m.filename):
                     raise ValueError(f"unsafe filename: {m.filename!r}")
+                if not (isinstance(m.id, str) and m.id):
+                    raise ValueError(f"bad id for {m.filename!r}")
+                if m.type not in ("image", "video"):
+                    raise ValueError(f"bad type {m.type!r} for {m.filename}")
+                if not isinstance(m.enabled, bool):
+                    raise ValueError(f"bad enabled flag for {m.filename}")
+                if m.image_duration is not None and not (
+                        _is_finite_number(m.image_duration)
+                        and m.image_duration > 0):
+                    raise ValueError(f"bad image_duration for {m.filename}")
                 meta = files.get(m.filename)
                 if not isinstance(meta, dict):
                     raise ValueError(f"missing file meta for {m.filename}")

@@ -10,3 +10,4 @@ dist/
 .superpowers/
 .pytest_cache/
 .tmp/
+.claude/
