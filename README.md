@@ -101,6 +101,32 @@ mirror. The sync channel is treated as untrusted and validated at the boundary.
 
 ---
 
+## Limitations
+
+FleetSign is deliberately a small, simple tool. Know what it does *not* do
+before you choose it:
+
+- **One playlist for the whole fleet.** Every screen mirrors the master's single
+  playlist — you can't show different content on different screens, or group them.
+  Enable/disable and per-item schedules apply fleet-wide, not per screen. To run
+  more than one playlist, run a separate master for each (each with its own
+  slaves).
+- **Fullscreen media only.** It plays one image or video at a time, edge to edge.
+  There are **no overlays** — no text/captions, tickers, logos, layout zones,
+  transitions, web pages, or live data. If you need a designed layout, this isn't
+  it.
+- **One screen per Pi.** Each Pi drives a single fullscreen display.
+- **One shared password, no accounts.** A single admin password gates the whole
+  UI; there are no per-user logins, roles, or audit trail.
+- **Trusted LAN only, no TLS.** The web UI and the master↔slave sync run over
+  plain HTTP (the sync is token-authenticated but not encrypted). Keep it on a
+  private network — don't expose it to the internet; put a VPN or reverse proxy
+  in front if you need remote access.
+- **Manual failover.** If the master goes down, slaves keep playing their last
+  sync, but you can't edit anything until you manually promote a slave to master.
+
+---
+
 ## Requirements
 
 - **Raspberry Pi 4, 5, or newer** running **Raspberry Pi OS (Bookworm or newer)
