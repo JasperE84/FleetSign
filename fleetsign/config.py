@@ -61,8 +61,13 @@ class AppConfig:
         return bool(self.password_hash)
 
     def set_password(self, password: str) -> None:
-        self.password_hash = generate_password_hash(password)
-        self.save()
+        # Hash outside the lock -- it's a deliberately slow KDF and there's no
+        # reason to block other config writers during it. Only the field
+        # assignment + persist need to be serialized.
+        password_hash = generate_password_hash(password)
+        with self._save_lock:
+            self.password_hash = password_hash
+            self._save_locked()
 
     def check_password(self, password: str) -> bool:
         return bool(self.password_hash) and check_password_hash(self.password_hash, password)
@@ -71,44 +76,55 @@ class AppConfig:
         return bool(self.master_url)
 
     def join_master(self, master_url: str, sync_token: str) -> None:
-        self.master_url = master_url
-        self.sync_token = sync_token
-        self.save()
+        # Two fields mutated + persisted as ONE critical section. Without the lock
+        # around the assignments, two concurrent config writes could interleave
+        # and persist a mixed state (master_url from one call, sync_token from
+        # another) -- a real corruption that nothing later converges back.
+        with self._save_lock:
+            self.master_url = master_url
+            self.sync_token = sync_token
+            self._save_locked()
 
     def become_master(self) -> None:
-        self.master_url = ""
-        self.save()
+        with self._save_lock:
+            self.master_url = ""
+            self._save_locked()
 
     def set_sync_token(self, token: str) -> None:
-        self.sync_token = token
-        self.save()
+        with self._save_lock:
+            self.sync_token = token
+            self._save_locked()
 
     def set_password_hash(self, password_hash: Optional[str]) -> None:
         # Store a pre-computed hash (e.g. one synced from the master) without
         # re-hashing. This is the UI-login credential, distinct from sync_token.
-        self.password_hash = password_hash
-        self.save()
+        with self._save_lock:
+            self.password_hash = password_hash
+            self._save_locked()
 
     def save(self) -> None:
-        # Snapshot AND write under the lock. Two reasons it guards the whole body,
-        # not just the write: the temp file has a single writer (it shares a fixed
-        # config.json.tmp, so concurrent writers would garble it or race os.replace
-        # into a FileNotFoundError), and -- crucially -- the JSON snapshot is taken
-        # while holding the lock. Building it beforehand leaves a window where a
-        # concurrent save() completes in the gap, after which this older snapshot's
-        # os.replace overwrites the newer one (lost update: e.g. a SyncClient
-        # set_password_hash silently reverting a Waitress worker's become_master).
-        # Same atomic temp+replace discipline as the store's _save for manifest.json.
         with self._save_lock:
-            d = {
-                "session_secret": self.session_secret,
-                "password_hash": self.password_hash,
-                "host": self.host,
-                "port": self.port,
-                "master_url": self.master_url,
-                "sync_token": self.sync_token,
-            }
-            blob = json.dumps(d, indent=2)
-            tmp = self.config_path.with_suffix(".json.tmp")
-            tmp.write_text(blob, "utf-8")
-            os.replace(tmp, self.config_path)
+            self._save_locked()
+
+    def _save_locked(self) -> None:
+        # Caller MUST already hold _save_lock. Every config mutation runs its
+        # field updates AND this persist inside that one lock, so: each field's
+        # writes are atomic across concurrent setters; the JSON snapshot is taken
+        # under the lock (a snapshot built beforehand leaves a window where a
+        # concurrent save completes and is then overwritten by the stale one --
+        # a lost update); and the shared config.json.tmp has a single writer, so
+        # no garbled temp or os.replace racing into a FileNotFoundError. The lock
+        # is a plain (non-reentrant) Lock: public methods acquire exactly once and
+        # call this helper, which never re-acquires. Same atomic temp+replace
+        # discipline as the store's _save for manifest.json.
+        d = {
+            "session_secret": self.session_secret,
+            "password_hash": self.password_hash,
+            "host": self.host,
+            "port": self.port,
+            "master_url": self.master_url,
+            "sync_token": self.sync_token,
+        }
+        tmp = self.config_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, indent=2), "utf-8")
+        os.replace(tmp, self.config_path)

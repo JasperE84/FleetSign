@@ -135,3 +135,32 @@ def test_save_snapshots_state_under_lock(tmp_path, monkeypatch):
 
     assert held_at_snapshot and all(held_at_snapshot), \
         "snapshot serialized outside _save_lock -- lost-update window open"
+
+
+def test_join_master_field_updates_are_atomic_under_lock(tmp_path):
+    # join_master writes two fields (master_url, sync_token); they must mutate as
+    # one critical section. Otherwise two concurrent config writes interleave and
+    # persist a MIXED state -- master_url from one call, sync_token from another --
+    # a real, non-self-healing corruption (not just a transient torn snapshot).
+    # Proof via the lock: while _save_lock is held, join_master must not apply
+    # EITHER field; before the fix the fields were assigned outside the lock.
+    import threading
+    import time
+
+    cfg = AppConfig.load_or_create(tmp_path)
+    before = (cfg.master_url, cfg.sync_token)  # master "" + an auto-gen token
+    cfg._save_lock.acquire()
+    done = threading.Event()
+
+    def run():
+        cfg.join_master("URL", "TOK")
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    time.sleep(0.05)  # let the thread reach join_master; it must block on the lock
+    mid = (cfg.master_url, cfg.sync_token)
+    cfg._save_lock.release()
+    assert done.wait(2.0)
+
+    assert mid == before, "join_master applied a field outside the lock"
+    assert (cfg.master_url, cfg.sync_token) == ("URL", "TOK")
