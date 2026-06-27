@@ -1,0 +1,12 @@
+# Started by ~/.config/labwc/autostart (see install.sh), not by `systemctl enable`:
+# the desktop's graphical-session.target is not reliably reached for --user units on
+# Raspberry Pi OS. systemd just supervises it (Restart=always).
+[Unit]
+Description=FleetSign
+
+[Service]
+Type=simple
+WorkingDirectory=%h/fleetsign
+ExecStart=%h/fleetsign/.venv/bin/python -m fleetsign --root %h/fleetsign
+Restart=always
+RestartSec=3

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign — Set up</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body class="auth">
+  <div class="card">
+    <h1><span class="dot"></span> FleetSign</h1>
+    <p class="hint" style="text-align:center; margin-top:-8px">Choose an admin password to get started.</p>
+    {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+    <form method="post" action="{{ url_for('setup') }}">
+      <label><input type="radio" name="mode" value="master" checked onclick="document.getElementById('join').style.display='none'"> This is the master</label>
+      <label><input type="radio" name="mode" value="join" onclick="document.getElementById('join').style.display='block'"> This screen joins a master</label>
+      <input type="password" name="password" placeholder="Admin password (min 4 characters)">
+      <div id="join" style="display:none">
+        <input type="text" name="master_url" placeholder="Master IP, e.g. 192.168.1.50:8080">
+        <input type="text" name="sync_token" placeholder="Sync token (from the master's page)">
+      </div>
+      <button type="submit">Save &amp; continue</button>
+    </form>
+  </div>
+</body></html>

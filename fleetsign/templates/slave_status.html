@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign — Screen</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body>
+  <header class="topbar"><div class="inner">
+    <span class="brand"><span class="dot"></span> FleetSign — Screen</span>
+    <span class="spacer"></span>
+    <span id="status" class="muted">Loading…</span>
+  </div></header>
+
+  <main class="container">
+    {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+
+    <h1>This Pi is a screen</h1>
+    <section class="card">
+      <h2>Mirroring</h2>
+      <p>Master: <strong>{{ master_url }}</strong></p>
+      <p class="hint">Items: {{ item_count }} ·
+        Last sync: <span id="lastsync">{{ last_sync or 'never' }}</span>
+        {% if last_error %}· <span class="pill off">error: {{ last_error }}</span>{% endif %}
+      </p>
+    </section>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Video decoder (local to this Pi)</h2>
+        <form class="row" method="post" action="{{ url_for('local_hwdec') }}">
+          <select name="hwdec">
+            <option value="auto-copy" {{ 'selected' if settings.hwdec == 'auto-copy' }}>auto-copy (recommended)</option>
+            <option value="no" {{ 'selected' if settings.hwdec == 'no' }}>no (software)</option>
+            <option value="auto" {{ 'selected' if settings.hwdec == 'auto' }}>auto (may blue-screen)</option>
+          </select>
+          <button class="ghost" type="submit">Save decoder</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Master connection (local to this Pi)</h2>
+        <form class="row" method="post" action="{{ url_for('local_connection') }}">
+          <input type="text" name="master_url" value="{{ master_url }}">
+          <input type="text" name="sync_token" value="{{ sync_token }}">
+          <button class="ghost" type="submit">Update</button>
+        </form>
+        <form method="post" action="{{ url_for('become_master') }}" onsubmit="return confirm('Make THIS Pi the master? It will restart and serve content to other screens.')">
+          <button class="danger" type="submit">Become master</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script>
+  function refreshStatus() {
+    fetch("{{ url_for('status') }}").then(function (r) { return r.json(); }).then(function (s) {
+      var txt = s.now + "  ·  " + s.weekday + ", " + s.tz;
+      if (s.last_error) txt += "  ·  SYNC ERROR";
+      document.getElementById("status").textContent = txt;
+      if (s.last_sync) document.getElementById("lastsync").textContent = s.last_sync;
+    }).catch(function () {});
+  }
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
+  </script>
+</body></html>

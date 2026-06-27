@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+/media/
+/data/
+*.egg-info/
+dist/
+.superpowers/
+.pytest_cache/
+.tmp/

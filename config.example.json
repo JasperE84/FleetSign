@@ -1,0 +1,6 @@
+{
+  "session_secret": "GENERATED-ON-FIRST-RUN",
+  "password_hash": null,
+  "host": "0.0.0.0",
+  "port": 8080
+}

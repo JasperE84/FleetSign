@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign — Screen</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body class="auth">
+  <div class="card">
+    <h1><span class="dot"></span> FleetSign — Screen</h1>
+    {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+    <p class="hint">This screen is joining <strong>{{ master_url }}</strong>.</p>
+    <p class="hint">Waiting for the first sync from the master, which delivers its
+      settings and the login password. This page unlocks once that sync completes.</p>
+
+    <details>
+      <summary class="hint">Not connecting? Fix the master address or token…</summary>
+      <form class="row" method="post" action="{{ url_for('local_connection') }}">
+        <input type="text" name="master_url" value="{{ master_url }}" placeholder="Master IP, e.g. 192.168.1.50:8080">
+        <input type="text" name="sync_token" placeholder="Sync token (from the master's page)">
+        <button class="ghost" type="submit">Update connection</button>
+      </form>
+      <form method="post" action="{{ url_for('become_master') }}" onsubmit="return confirm('Make THIS Pi the master? It will restart and serve content to other screens.')">
+        <button class="danger" type="submit">Become master</button>
+      </form>
+    </details>
+  </div>
+</body></html>

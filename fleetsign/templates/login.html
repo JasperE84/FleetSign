@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign — Log in</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body class="auth">
+  <div class="card">
+    <h1><span class="dot"></span> FleetSign</h1>
+    {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+    <form method="post" action="{{ url_for('login') }}">
+      <input type="password" name="password" placeholder="Password" autofocus required>
+      <button type="submit">Log in</button>
+    </form>
+  </div>
+</body></html>

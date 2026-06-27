@@ -1,0 +1,22 @@
+[project]
+name = "fleetsign"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["flask>=3.0", "waitress>=3.0", "werkzeug>=3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fleetsign"]
+
+[tool.setuptools.package-data]
+fleetsign = ["templates/*.html", "static/*.css"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

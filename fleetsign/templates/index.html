@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body>
+  <header class="topbar"><div class="inner">
+    <span class="brand"><span class="dot"></span> FleetSign</span>
+    <span class="spacer"></span>
+    <span id="status" class="muted">Loading…</span>
+    <a class="ghost-link" href="{{ url_for('logout') }}">Log out</a>
+  </div></header>
+
+  <main class="container">
+    {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+    <p id="clockwarn" class="warn-banner" style="display:none">⚠ The Pi clock looks unset (no RTC). Schedules will be wrong until it syncs to the network.</p>
+
+    <h1>Playlist</h1>
+
+    <section class="card">
+      <h2>Add media</h2>
+      <form class="upload" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+        <input type="file" name="files" multiple>
+        <button type="submit">Upload</button>
+        <span class="hint">Images and videos — large videos are fine.</span>
+      </form>
+    </section>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Preview</th><th>File</th><th>Play</th><th>Image&nbsp;secs</th><th>Schedule</th><th>Order</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for m in media %}
+        <tr class="{% if m.id in missing %}missing {% endif %}{% if not m.enabled %}disabled{% endif %}">
+          <td class="col-idx" data-label="#">{{ loop.index }}</td>
+          <td data-label="Preview">{% if m.type == 'image' %}<img class="thumb" src="{{ url_for('media_file', name=m.filename) }}" loading="lazy" alt="">{% else %}<span class="vid-ico">🎞</span>{% endif %}</td>
+          <td data-label="File"><span class="fname">{{ m.filename }}</span>{% if m.id in missing %} <span class="pill off">missing</span>{% endif %}</td>
+          <td data-label="Play">
+            <form method="post" action="{{ url_for('enable', item_id=m.id) }}">
+              <input type="hidden" name="enabled" value="{{ '0' if m.enabled else '1' }}">
+              <button class="ghost" type="submit">{{ 'Disable' if m.enabled else 'Enable' }}</button>
+            </form>
+          </td>
+          <td data-label="Image secs">
+            {% if m.type == 'image' %}
+            <form class="row" method="post" action="{{ url_for('duration', item_id=m.id) }}">
+              <input type="text" name="duration" size="3" value="{{ m.image_duration or '' }}" placeholder="def">
+              <button class="ghost" type="submit">Set</button>
+            </form>
+            {% endif %}
+          </td>
+          <td data-label="Schedule">
+            <form class="schedule-form" method="post" action="{{ url_for('schedule', item_id=m.id) }}">
+              <label class="sched-on"><input type="checkbox" name="scheduled" value="1" {{ 'checked' if m.schedule }}> on</label>
+              <div class="days">
+                {% for d in range(7) %}
+                <label class="day"><input type="checkbox" name="days" value="{{ d }}" {{ 'checked' if m.schedule and d in m.schedule.days }}> <span>{{ ['Mo','Tu','We','Th','Fr','Sa','Su'][d] }}</span></label>
+                {% endfor %}
+              </div>
+              <div class="times">
+                <label class="time"><span>Start</span><input type="time" name="start" value="{{ m.schedule.start if m.schedule else '08:00' }}"></label>
+                <label class="time"><span>End</span><input type="time" name="end" value="{{ m.schedule.end if m.schedule else '22:00' }}"></label>
+              </div>
+              <button class="ghost" type="submit">Save</button>
+            </form>
+          </td>
+          <td class="nowrap" data-label="Order">
+            <form method="post" action="{{ url_for('reorder', item_id=m.id) }}" style="display:inline"><input type="hidden" name="direction" value="up"><button class="ghost icon" type="submit">▲</button></form>
+            <form method="post" action="{{ url_for('reorder', item_id=m.id) }}" style="display:inline"><input type="hidden" name="direction" value="down"><button class="ghost icon" type="submit">▼</button></form>
+          </td>
+          <td class="col-del">
+            <form method="post" action="{{ url_for('delete', item_id=m.id) }}" onsubmit="return confirm('Delete {{ m.filename }}?')"><button class="danger" type="submit">Delete</button></form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not media %}
+        <tr><td colspan="8" class="hint" style="text-align:center; padding:28px">No media yet — upload images or videos above.</td></tr>
+        {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Settings</h2>
+        <form class="row" method="post" action="{{ url_for('settings') }}">
+          <label class="field"><span>Default image seconds</span><input type="text" name="default_image_duration" size="4" value="{{ settings.default_image_duration }}"></label>
+          <label class="field"><span>Video decoder</span>
+            <select name="hwdec">
+              <option value="auto-copy" {{ 'selected' if settings.hwdec == 'auto-copy' }}>auto-copy (recommended)</option>
+              <option value="no" {{ 'selected' if settings.hwdec == 'no' }}>no (software)</option>
+              <option value="auto" {{ 'selected' if settings.hwdec == 'auto' }}>auto (may blue-screen)</option>
+            </select>
+          </label>
+          <label><input type="checkbox" name="muted" value="1" {{ 'checked' if settings.muted }}> mute videos</label>
+          <button type="submit">Save settings</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Controls</h2>
+        <div class="row">
+          <form method="post" action="{{ url_for('restart_playback') }}"><button class="ghost" type="submit">Restart playback</button></form>
+          <form method="post" action="{{ url_for('blank') }}"><input type="hidden" name="blank" value="1"><button class="ghost" type="submit">Blank screen</button></form>
+          <form method="post" action="{{ url_for('blank') }}"><input type="hidden" name="blank" value="0"><button class="ghost" type="submit">Resume</button></form>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Maintenance</h2>
+        <div class="row">
+          <form method="post" action="{{ url_for('maintenance') }}"><input type="hidden" name="on" value="1"><button class="ghost" type="submit">Enter maintenance</button></form>
+          <form method="post" action="{{ url_for('maintenance') }}"><input type="hidden" name="on" value="0"><button class="ghost" type="submit">Resume signage</button></form>
+        </div>
+        <p class="hint">Or press <strong>F12</strong> on the Pi to toggle. A reboot always returns to fullscreen.</p>
+      </section>
+
+      <section class="card">
+        <h2>Change password</h2>
+        <form class="row" method="post" action="{{ url_for('password') }}">
+          <input type="password" name="password" placeholder="New password">
+          <button type="submit">Change</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Screens &amp; sync</h2>
+        <p class="hint">Connected screens (polled in the last 5&nbsp;min):</p>
+        <ul class="screens">
+          {% for ip in screens %}<li>{{ ip }}</li>{% else %}<li class="hint">None yet.</li>{% endfor %}
+        </ul>
+        <form class="row" method="post" action="{{ url_for('sync_token_update') }}"
+              onsubmit="return confirm('Changing the token stops every connected screen from syncing until you re-enter the new token on each one. Continue?')">
+          <label class="field"><span>Sync token (enter this on each screen; changing it requires re-entering on every screen)</span>
+            <input type="text" name="sync_token" value="{{ sync_token }}"></label>
+          <button class="ghost" type="submit">Update token</button>
+        </form>
+        <details>
+          <summary class="hint">Turn this Pi into a screen of another master…</summary>
+          <form class="row" method="post" action="{{ url_for('join_master') }}" onsubmit="return confirm('This Pi will restart as a screen of that master. Continue?')">
+            <input type="text" name="master_url" placeholder="Master IP, e.g. 192.168.1.50:8080">
+            <input type="text" name="sync_token" placeholder="Sync token">
+            <button class="danger" type="submit">Join master</button>
+          </form>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <script>
+  function refreshStatus() {
+    fetch("{{ url_for('status') }}").then(function (r) { return r.json(); }).then(function (s) {
+      var txt = s.now + "  ·  " + s.weekday + ", " + s.tz;
+      if (s.maintenance) txt += "  ·  MAINTENANCE";
+      if (s.blank) txt += "  ·  BLANKED";
+      document.getElementById("status").textContent = txt;
+      document.getElementById("clockwarn").style.display = s.clock_ok ? "none" : "block";
+    }).catch(function () {});
+  }
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
+  </script>
+</body></html>
