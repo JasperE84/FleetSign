@@ -1,14 +1,15 @@
 # FleetSign
 
-**Self-hosted signage that mirrors one playlist across every screen. Raspberry Pi compatible.**
+**Self-hosted signage that mirrors one playlist across every screen. Runs on any Linux desktop — Raspberry Pi, Debian, or Ubuntu.**
 
-![Platform: Raspberry Pi](https://img.shields.io/badge/platform-Raspberry%20Pi%204%2F5%2B-c51a4a)
+![Platform: Linux](https://img.shields.io/badge/platform-Raspberry%20Pi%20%7C%20Debian%20%7C%20Ubuntu-c51a4a)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Tests: 118 passing](https://img.shields.io/badge/tests-118%20passing-success)
+![Tests: 124 passing](https://img.shields.io/badge/tests-124%20passing-success)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)
 
-FleetSign turns a Raspberry Pi and a wall-mounted screen into an unattended,
-always-on display that loops your images and videos fullscreen. You manage
+FleetSign turns a small Linux box — a Raspberry Pi, or any Debian/Ubuntu
+mini-PC — and a wall-mounted screen into an unattended, always-on display that
+loops your images and videos fullscreen. You manage
 everything — what plays, in what order, for how long, and when — from a small
 password-protected web page on the same network. There are **no console
 commands, no accounts, and nothing to babysit**: it brings itself back up after
@@ -115,7 +116,7 @@ before you choose it:
   There are **no overlays** — no text/captions, tickers, logos, layout zones,
   transitions, web pages, or live data. If you need a designed layout, this isn't
   it.
-- **One screen per Pi.** Each Pi drives a single fullscreen display.
+- **One screen per device.** Each host drives a single fullscreen display.
 - **One shared password, no accounts.** A single admin password gates the whole
   UI; there are no per-user logins, roles, or audit trail.
 - **Trusted LAN only, no TLS.** The web UI and the master↔slave sync run over
@@ -129,19 +130,31 @@ before you choose it:
 
 ## Requirements
 
-- **Raspberry Pi 4, 5, or newer** running **Raspberry Pi OS (Bookworm or newer)
-  with the desktop**, auto-logging into the desktop session (the player draws a
-  fullscreen window on X11 or Wayland).
-- Network access on the LAN. The Pi has no real-time clock, so it relies on the
-  network to set the time at boot — schedules depend on it.
-- **Python 3.11+** (shipped with Bookworm).
-- One system dependency, **mpv**, installed automatically by the installer.
+FleetSign is a plain **Python + mpv** program — nothing in it is Pi-specific, so
+it runs on **any modern Linux desktop**:
 
-Runtime Python dependencies are just `flask` and `waitress`.
+- A **Linux desktop session** (X11 or Wayland) that **auto-logs in**, in which
+  mpv can draw a fullscreen window. The **reference platform is a Raspberry Pi
+  4/5 on Raspberry Pi OS (Bookworm) with the desktop**, but a Debian or Ubuntu
+  mini-PC works the same way.
+- **Python 3.11+** (shipped with Bookworm; your distro's `python3` elsewhere).
+- One system dependency, **mpv**.
+- **systemd** for the bundled service supervision and autostart — the app itself
+  is just a `python -m fleetsign` process, so this is optional if you supervise
+  it another way.
+- Network access on the LAN. A device with no real-time clock (like a Pi) relies
+  on the network to set its time at boot — schedules depend on a correct clock.
+
+Runtime Python dependencies are just `flask` and `waitress`. The bundled
+installer pulls in mpv and builds the virtualenv for you on Debian-family
+systems (see [Quick start](#quick-start)).
 
 ---
 
-## Quick start (on the Pi)
+## Quick start
+
+`install.sh` is written for **Raspberry Pi OS**: it installs packages with `apt`
+*and* wires autostart through the Pi's default **labwc** compositor.
 
 ```bash
 git clone <this-repo> ~/fleetsign      # the path must be ~/fleetsign
@@ -149,16 +162,28 @@ bash ~/fleetsign/install.sh
 ```
 
 The installer adds `mpv`, creates a virtualenv, installs the service, wires up
-desktop autostart, and starts it. Then, from any browser on the same network:
+labwc autostart, and starts it. Then, from any browser on the same network:
 
-1. Open **`http://<pi-ip>:8080`** (the address also appears in the screen's
+1. Open **`http://<host-ip>:8080`** (the address also appears in the screen's
    bottom-right corner).
 2. On first visit you're sent to a **setup page** — choose the admin password.
    That single password is the only credential.
 3. Upload media and configure playback entirely from the web UI.
 
+**Plain Debian or Ubuntu** also use `apt`, so the installer's package, venv, and
+service steps run fine and it starts the service for the current session — but
+their default desktop is **GNOME, not labwc**, so the autostart line it writes to
+`~/.config/labwc/autostart` is never read and playback won't return on reboot.
+Add an autostart hook for your actual desktop instead — see
+[Managing the service](#managing-the-service).
+
+**Non-`apt` distros** (Fedora, Arch, …) skip the installer entirely: install
+`mpv` and a Python 3.11 venv with your package manager, `pip install -e
+~/fleetsign`, copy `systemd/fleetsign.service` into `~/.config/systemd/user/`,
+then add an autostart hook as above.
+
 For the full deployment guide — service management, the master/slave fleet
-setup, an on-Pi verification checklist, updating, and troubleshooting — see
+setup, an on-host verification checklist, updating, and troubleshooting — see
 **[INSTALL.md](INSTALL.md)**.
 
 ### Multiple screens, in brief
@@ -171,6 +196,70 @@ walkthrough (including failover) is in [INSTALL.md → Multiple screens](INSTALL
 
 ---
 
+## Managing the service
+
+FleetSign runs as a `systemd --user` service named `fleetsign`. Day-to-day you
+shouldn't need any of this — playback is controlled from the web UI and the
+service self-heals — but for the admin on the host:
+
+```bash
+systemctl --user start fleetsign      # start it now
+systemctl --user restart fleetsign    # restart the daemon (e.g. after an update)
+systemctl --user stop fleetsign       # stop it
+systemctl --user status fleetsign     # is it running? (fetch status)
+journalctl --user -u fleetsign -f     # live logs (errors, mpv relaunches)
+```
+
+`systemd` supervises the process and restarts it if it dies (`Restart=always`),
+but it does **not** start it at boot — that's the autostart hook below.
+
+### How autostart works (and how to disable it)
+
+On Raspberry Pi OS the desktop session's `graphical-session.target` isn't
+reliably reached for `--user` units, so `systemctl --user enable fleetsign`
+would **not** launch it on login. Instead, `install.sh` appends a block to the
+**labwc compositor's autostart file**, `~/.config/labwc/autostart`, which labwc
+runs at session start with the Wayland environment available:
+
+```bash
+# ~/.config/labwc/autostart
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR 2>/dev/null
+systemctl --user start fleetsign.service
+```
+
+The first line hands the running display's environment to the systemd user
+manager (so mpv can find the screen); the second starts the supervised unit.
+Autostart therefore **depends on this file** — remove the lines and the player
+won't come back after a reboot, even though `systemctl --user start fleetsign`
+still works by hand.
+
+```bash
+# Disable autostart (leave the service installed, just don't launch on boot):
+sed -i '/# Start the FleetSign player/,+2d' ~/.config/labwc/autostart
+
+# Re-enable autostart: re-run the installer (it re-adds the block idempotently)
+bash ~/fleetsign/install.sh
+```
+
+### Other desktops / compositors
+
+The labwc file is specific to Raspberry Pi OS Bookworm's default (Wayland)
+session. On a different desktop, add the equivalent lines to **its** autostart
+and FleetSign starts the same way. The key step is always: import the session's
+display variable (`WAYLAND_DISPLAY` on Wayland, `DISPLAY` on X11) into the
+systemd user manager, then start the unit.
+
+| Session | Autostart location | Lines to add |
+|---|---|---|
+| labwc — Pi OS, Wayland (default) | `~/.config/labwc/autostart` | `systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR`<br>`systemctl --user start fleetsign.service` |
+| X11 — openbox / LXDE (older Pi OS) | `~/.config/openbox/autostart` or `~/.config/lxsession/LXDE-pi/autostart` | `systemctl --user import-environment DISPLAY XDG_RUNTIME_DIR`<br>`systemctl --user start fleetsign.service` |
+| Any XDG-compliant desktop | `~/.config/autostart/fleetsign.desktop` | `Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR; systemctl --user start fleetsign.service'` |
+
+The service unit itself is portable across desktops — only the autostart hook
+differs.
+
+---
+
 ## Development
 
 No Pi or mpv is needed to run the tests — the player's mpv and socket
@@ -178,7 +267,7 @@ interactions are dependency-injected, so the suite runs on any platform
 (including Windows/CI).
 
 ```bash
-python -m pytest                         # full suite (~118 tests)
+python -m pytest                         # full suite (~124 tests)
 python -m pytest tests/test_store.py -v   # one file
 python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv for real playback)
 ```
@@ -193,11 +282,11 @@ python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv 
 | `fleetsign/sync.py` | `SyncClient` — the slave-side mirror; `manifest_payload` for the master |
 | `fleetsign/schedule.py` | weekday + time-window activeness check |
 | `fleetsign/model.py` | data model (`MediaItem`, `Schedule`, `Settings`) |
-| `fleetsign/config.py` | per-Pi config + auth; role (`master_url`/`sync_token`) |
+| `fleetsign/config.py` | per-host config + auth; role (`master_url`/`sync_token`) |
 | `fleetsign/mpv_ipc.py` | thin mpv JSON-IPC client |
 | `fleetsign/__main__.py` | entry point — picks the master or slave app by role |
 | `tests/` | the test suite |
-| `install.sh` / `systemd/` | one-time Pi deployment |
+| `install.sh` / `systemd/` | one-time deployment (Raspberry Pi OS; `apt` + venv steps also fit Debian/Ubuntu) |
 
 ---
 
