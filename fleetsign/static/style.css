@@ -160,7 +160,7 @@ tr.disabled:hover { opacity: .62; }
 .auth .card { width: 100%; max-width: 360px; margin: 0; padding: 26px; }
 .auth h1 { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 0 0 18px; }
 .auth form { display: flex; flex-direction: column; gap: 12px; }
-.auth input { width: 100%; }
+.auth input:not([type=radio]):not([type=checkbox]) { width: 100%; }
 
 /* ---- mobile: stack settings cards, collapse the playlist table into cards ---- */
 @media (max-width: 760px) {
