@@ -4,7 +4,7 @@
 
 ![Platform: Linux](https://img.shields.io/badge/platform-Raspberry%20Pi%20%7C%20Debian%20%7C%20Ubuntu-c51a4a)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Tests: 133 passing](https://img.shields.io/badge/tests-133%20passing-success)
+![Tests: 140 passing](https://img.shields.io/badge/tests-140%20passing-success)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)
 
 FleetSign turns a small Linux box — a Raspberry Pi, or any Debian/Ubuntu
@@ -141,7 +141,8 @@ it runs on **any modern Linux desktop**:
   4/5 on Raspberry Pi OS (Bookworm) with the desktop**, but a Debian or Ubuntu
   mini-PC works the same way.
 - **Python 3.11+** (shipped with Bookworm; your distro's `python3` elsewhere).
-- One system dependency, **mpv**.
+- System dependencies: **mpv**, **xdotool**, and **wmctrl**. mpv renders the
+  media; xdotool/wmctrl are used by the foreground guard on XWayland sessions.
 - **systemd** for the bundled service supervision and autostart — the app itself
   is just a `python -m fleetsign` process, so this is optional if you supervise
   it another way.
@@ -149,8 +150,8 @@ it runs on **any modern Linux desktop**:
   on the network to set its time at boot — schedules depend on a correct clock.
 
 Runtime Python dependencies are just `flask` and `waitress`. The bundled
-installer pulls in mpv and builds the virtualenv for you on Debian-family
-systems (see [Quick start](#quick-start)).
+installer pulls in the system packages and builds the virtualenv for you on
+Debian-family systems (see [Quick start](#quick-start)).
 
 ---
 
@@ -164,8 +165,9 @@ git clone <this-repo> ~/fleetsign      # the path must be ~/fleetsign
 bash ~/fleetsign/install.sh
 ```
 
-The installer adds `mpv`, creates a virtualenv, installs the service, wires up
-labwc autostart, and starts it. Then, from any browser on the same network:
+The installer adds `mpv`, `xdotool`, and `wmctrl`, creates a virtualenv, installs
+the service, wires up labwc autostart, and starts it. Then, from any browser on
+the same network:
 
 1. Open **`http://<host-ip>:8080`** (the address also appears in the screen's
    bottom-right corner).
@@ -181,9 +183,9 @@ Add an autostart hook for your actual desktop instead — see
 [Managing the service](#managing-the-service).
 
 **Non-`apt` distros** (Fedora, Arch, …) skip the installer entirely: install
-`mpv` and a Python 3.11 venv with your package manager, `pip install -e
-~/fleetsign`, copy `systemd/fleetsign.service` into `~/.config/systemd/user/`,
-then add an autostart hook as above.
+`mpv`, `xdotool`, `wmctrl`, and a Python 3.11 venv with your package manager,
+`pip install -e ~/fleetsign`, copy `systemd/fleetsign.service` into
+`~/.config/systemd/user/`, then add an autostart hook as above.
 
 For the full deployment guide — service management, the master/slave fleet
 setup, an on-host verification checklist, updating, and troubleshooting — see
@@ -232,7 +234,8 @@ systemctl --user start fleetsign.service
 
 The first line hands the running display's environment to the systemd user
 manager (so mpv can find the screen); `DISPLAY` is included because mpv renders
-through **XWayland** to stay always-on-top. The second starts the supervised unit.
+through **XWayland** to stay always-on-top and so the foreground guard can use
+`xdotool`/`wmctrl`. The second starts the supervised unit.
 Autostart therefore **depends on this file** — remove the lines and the player
 won't come back after a reboot, even though `systemctl --user start fleetsign`
 still works by hand.
@@ -251,8 +254,8 @@ The labwc file is specific to Raspberry Pi OS Bookworm's default (Wayland)
 session. On a different desktop, add the equivalent lines to **its** autostart
 and FleetSign starts the same way. The key step is always: import the session's
 display variables into the systemd user manager, then start the unit. On a Wayland
-session import **both** `WAYLAND_DISPLAY` and `DISPLAY` (mpv runs under XWayland for
-always-on-top); on X11, `DISPLAY`.
+session import **both** `WAYLAND_DISPLAY` and `DISPLAY` (mpv runs under XWayland
+for always-on-top and focus guarding); on X11, `DISPLAY`.
 
 | Session | Autostart location | Lines to add |
 |---|---|---|
@@ -272,7 +275,7 @@ interactions are dependency-injected, so the suite runs on any platform
 (including Windows/CI).
 
 ```bash
-python -m pytest                         # full suite (~133 tests)
+python -m pytest                         # full suite (~140 tests)
 python -m pytest tests/test_store.py -v   # one file
 python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv for real playback)
 ```

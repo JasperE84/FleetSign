@@ -6,7 +6,7 @@ export DEBIAN_FRONTEND=noninteractive
 APP_DIR="$HOME/fleetsign"
 
 sudo apt-get update
-sudo apt-get install -y mpv python3-venv
+sudo apt-get install -y mpv python3-venv xdotool wmctrl
 
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip

@@ -15,13 +15,13 @@ This Python package replaces an earlier **Bash implementation** (feh/VLC driven 
 Everything runs from the repo root. No Pi or mpv is needed for the test suite — the player's mpv interaction is dependency-injected.
 
 ```bash
-python -m pytest                       # full suite (≈124 tests)
+python -m pytest                       # full suite (≈140 tests)
 python -m pytest tests/test_store.py -v # one file
 python -m pytest tests/test_player.py::test_select_next_cycles_active_only -v  # one test
 python -m fleetsign --root . --port 8080  # run the daemon locally (needs mpv on PATH for real playback)
 ```
 
-There is no separate lint/build step; `pyproject.toml` configures pytest (`pythonpath=["."]`, `testpaths=["tests"]`). Runtime deps are `flask` + `waitress`; the only system dep is `mpv`. Deployment is via `install.sh` + `systemd/fleetsign.service` (a `systemd --user` unit) — see `INSTALL.md`.
+There is no separate lint/build step; `pyproject.toml` configures pytest (`pythonpath=["."]`, `testpaths=["tests"]`). Runtime deps are `flask` + `waitress`; system deps are `mpv`, `xdotool`, and `wmctrl`. Deployment is via `install.sh` + `systemd/fleetsign.service` (a `systemd --user` unit) — see `INSTALL.md`.
 
 ## Architecture (the big picture)
 
@@ -49,7 +49,7 @@ These are deliberate decisions; keep them when editing:
 - **Atomic writes** for both `manifest.json` and `config.json` (temp + `os.replace`); never write them in place.
 - **`tempfile.tempdir`** is set to the data dir in `main()` *only* (not `build()`), so large uploads spill to the SD card instead of a tmpfs `/tmp` — and tests that call `build()` don't mutate global temp state.
 - **Portability across mpv/Pi versions:** hardware decode is the web Settings' `hwdec` (default `auto-copy`; plain `auto` blue-screens video on the Pi compositor — it logs "cannot load libcuda.so.1"). Changing it in the UI relaunches mpv. No per-model config.
-- **Always-on-top runs through XWayland, on purpose.** The signage window must stay above other windows so a stray terminal can't cover it. A *native Wayland* client cannot pin itself on top (there is no protocol for it — `--ontop` silently no-ops), so `default_launcher` clears `WAYLAND_DISPLAY` to run mpv under XWayland, where `--ontop` sets the X11 `_NET_WM_STATE_ABOVE` hint; labwc honors it only because `install.sh` injects an `allowAlwaysOnTop` window rule for `mpv` into `rc.xml` (labwc disallows X11 always-on-top by default). Don't "simplify" this to a native-Wayland launch. On a real X11 session the same path is a no-op (`WAYLAND_DISPLAY` is already unset) and `--ontop` works directly — one launch path, both desktops. On-top tracks maintenance: *entering* clears `ontop` (so the windowed mpv stops covering the desktop), and the maintenance-*exit* relaunch restores it via the `--ontop` launch flag — never a live `set_property ontop True`, for the same window-recreation reason fullscreen isn't toggled live.
+- **Always-on-top runs through XWayland plus a focus guard, on purpose.** The signage window must stay above other windows so a stray terminal/dialog can't cover it. A *native Wayland* client cannot pin itself on top (there is no protocol for it — `--ontop` silently no-ops), so `default_launcher` sets `WAYLAND_DISPLAY` to a dead socket name (`fleetsign-no-wayland`) to force mpv under XWayland. Do not merely unset `WAYLAND_DISPLAY`: libwayland falls back to the default `wayland-0` socket. mpv launches with `--ontop` and a stable title; every 10 seconds `ForegroundGuard` uses `wmctrl` + `xdotool windowactivate` to reassert mpv as the raised/focused window. The guard is disabled in blank/maintenance mode. `install.sh` injects an `allowAlwaysOnTop` rule for future labwc versions where X11 always-on-top requests are blocked by default; on labwc 0.8.4 it is harmless.
 - **The sync channel is untrusted; validate at the boundary.** A slave treats the master's manifest as hostile input (token-auth only, no TLS): `sync_once` validates every field, requires each filename to be a safe basename (`_is_safe_media_name`), and **rejects the whole manifest rather than skipping a bad item** — a skipped item becomes a fileless playlist entry that also shields a stale local copy from pruning. Master-served media is size-checked; truncated downloads are dropped (`.tmp` deleted), never shown.
 - **`hwdec` is per-Pi and never synced.** It's local to each display's hardware: `manifest_payload` omits it and `replace_from_master` preserves the slave's local value. The synced UI password hash (the human login) is kept distinct from the `sync_token` that authenticates the pull.
 - **Role lives only in `config.json`** (`master_url`/`sync_token`); there's one codebase and one entry point. Don't fork master/slave into separate packages or persist role anywhere else.
@@ -57,7 +57,7 @@ These are deliberate decisions; keep them when editing:
 ## Testing approach
 
 mpv and sockets are injected so tests run on any platform (including Windows/CI):
-`PlayerController` takes `launcher`/`connector`/`clock` callables; tests pass a `FakeIpc` and never start real mpv. `mpv_ipc` tests use `socket.socketpair()`; the real `connect_unix`/`AF_UNIX` path only runs on the Pi. When adding behavior, prefer testing the pure piece (e.g. `select_next`, `is_active`, store methods, route handlers via Flask's test client) rather than the live loop.
+`PlayerController` takes `launcher`/`connector`/`clock` callables; tests pass a `FakeIpc` and never start real mpv. The focus guard also injects its command runner/clock, so tests do not call real `xdotool`/`wmctrl`. `mpv_ipc` tests use `socket.socketpair()`; the real `connect_unix`/`AF_UNIX` path only runs on the Pi. When adding behavior, prefer testing the pure piece (e.g. `select_next`, `is_active`, store methods, route handlers via Flask's test client) rather than the live loop.
 
 ## Reference docs
 

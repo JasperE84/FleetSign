@@ -5,7 +5,8 @@ set -euo pipefail
 # Python venv. Deliberately KEEPS your content: data/ (config.json with the admin
 # password + sync token, manifest.json) and media/ (uploaded files) are left in
 # place — delete ~/fleetsign yourself if you want a clean slate. Also leaves the
-# apt packages (mpv, python3-venv) installed, since other software may use them.
+# apt packages (mpv, python3-venv, xdotool, wmctrl) installed, since other
+# software may use them.
 
 APP_DIR="$HOME/fleetsign"
 UNIT="$HOME/.config/systemd/user/fleetsign.service"
@@ -46,4 +47,4 @@ if [ -d "$APP_DIR/.venv" ]; then
 fi
 
 echo "Uninstalled. Kept your media/ and data/ (incl. config.json) under $APP_DIR."
-echo "Left mpv and python3-venv installed; remove them with apt if unused elsewhere."
+echo "Left mpv, python3-venv, xdotool, and wmctrl installed; remove them with apt if unused elsewhere."

@@ -15,7 +15,8 @@ never touches the console.
 - `sudo` rights for the install (it installs system packages and a user service).
 - Python 3.11+ (shipped with Bookworm).
 
-The installer pulls in the only system dependency, **mpv**, plus `python3-venv`.
+The installer pulls in the system dependencies, **mpv**, **xdotool**, and
+**wmctrl**, plus `python3-venv`.
 
 ## Install
 
@@ -30,7 +31,7 @@ The installer pulls in the only system dependency, **mpv**, plus `python3-venv`.
    ```
 
    It will:
-   - `apt-get install -y mpv python3-venv`
+   - `apt-get install -y mpv python3-venv xdotool wmctrl`
    - create a virtualenv at `~/fleetsign/.venv` and `pip install -e ~/fleetsign`
    - copy `systemd/fleetsign.service` to `~/.config/systemd/user/`
    - add a start line to `~/.config/labwc/autostart` so the desktop session
@@ -127,13 +128,14 @@ This stops and removes the service, strips the autostart hook from
 `~/.config/labwc/autostart`, and deletes the venv. It **keeps** your media
 (`~/fleetsign/media/`) and state/config (`~/fleetsign/data/`), and leaves the apt
 packages (`mpv`, `python3-venv`) installed in case other software uses them.
+It also leaves `xdotool` and `wmctrl` installed for the same reason.
 
 To also wipe your content and the app directory:
 
 ```bash
 rm -rf ~/fleetsign           # removes media, playlist/state, and config — back up first
 # optional: loginctl disable-linger "$USER"
-# optional: sudo apt-get remove mpv python3-venv   # only if nothing else uses them
+# optional: sudo apt-get remove mpv python3-venv xdotool wmctrl   # only if nothing else uses them
 ```
 
 ## Troubleshooting
@@ -164,12 +166,14 @@ rm -rf ~/fleetsign           # removes media, playlist/state, and config — bac
   automatically when you change it.
 - **A terminal or other window covers the signage.** The player keeps mpv
   always-on-top by running it under **XWayland** (a native Wayland window cannot
-  pin itself on top) together with a labwc window rule. If a window can still sit
-  in front: confirm `~/.config/labwc/rc.xml` contains a `windowRule` for `mpv`
-  with `allowAlwaysOnTop="yes"` (re-running `install.sh` adds it), then reload the
-  compositor with `pkill -HUP labwc` or log out and back in. Check `pgrep -a
-  Xwayland` shows XWayland is running; if video regressed at the same time, it is
-  the XWayland render path — switch the decoder in **Settings → Video decoder**.
+  pin itself on top) together with a labwc window rule and a 10-second foreground
+  guard that re-raises and re-activates mpv while signage is active. If a window
+  can still sit in front: confirm `xdotool` and `wmctrl` are installed
+  (`command -v xdotool wmctrl`), `pgrep -a Xwayland` shows XWayland is running,
+  and `xdotool search --name '^FleetSign Signage$'` finds the mpv window. The
+  guard is intentionally disabled in maintenance mode. If video regressed at the
+  same time, it is the XWayland render path — switch the decoder in
+  **Settings → Video decoder**.
 - **Video plays with sound when it shouldn't (or vice-versa).** Toggle "mute videos"
   in Settings (default is muted).
 - **Can't reach `http://<pi-ip>:8080`.** Read the address shown in the screen's

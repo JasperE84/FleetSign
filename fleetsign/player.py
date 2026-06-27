@@ -5,9 +5,10 @@ import os
 import socket
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from .model import MediaItem
 from .mpv_ipc import MpvIpc, connect_unix
@@ -23,6 +24,12 @@ INPUT_CONF = f"{MAINTENANCE_KEY} cycle fullscreen\n"
 
 # A stable id for our persistent on-screen IP overlay (any unique int).
 OSD_OVERLAY_ID = 47
+
+# Stable X11 identity for the foreground guard. The title is what xdotool searches
+# for.
+MPV_WINDOW_TITLE = "FleetSign Signage"
+WAYLAND_DISPLAY_BLOCKER = "fleetsign-no-wayland"
+FOREGROUND_GUARD_INTERVAL = 10.0
 
 
 def local_ip() -> Optional[str]:
@@ -72,6 +79,7 @@ def select_next(items: list[MediaItem], now: datetime, last_id: Optional[str]) -
 def mpv_args(socket_path: str, input_conf: str, hwdec: str) -> list[str]:
     return [
         "mpv", "--idle=yes", "--force-window=yes", "--fullscreen", "--ontop",
+        f"--title={MPV_WINDOW_TITLE}",
         f"--hwdec={hwdec}", "--no-osc", "--no-input-default-bindings",
         "--really-quiet", "--image-display-duration=inf",
         "--cursor-autohide=always",
@@ -86,19 +94,93 @@ def default_launcher(socket_path: str, input_conf: str, hwdec: str) -> subproces
     # terminal raised over the fullscreen signage would stay in front until mpv
     # is relaunched. Under XWayland mpv's --ontop sets the X11 _NET_WM_STATE_ABOVE
     # hint, which labwc keeps above other windows once install.sh's
-    # allowAlwaysOnTop rule permits it. Clearing WAYLAND_DISPLAY routes mpv
-    # through XWayland on a Wayland session and is a no-op on a real X11 session
-    # (the var is unset there) — one launch path covers both desktops. DISPLAY is
-    # defaulted because the systemd --user environment imports WAYLAND_DISPLAY but
-    # not necessarily DISPLAY; :0 is the XWayland/Xorg display on a single-screen Pi.
+    # allowAlwaysOnTop rule permits it. Set WAYLAND_DISPLAY to a dead socket name
+    # rather than unsetting it: libwayland falls back to the default wayland-0
+    # socket when the variable is absent. DISPLAY is defaulted because the
+    # systemd --user environment imports WAYLAND_DISPLAY but not necessarily
+    # DISPLAY; :0 is the XWayland/Xorg display on a single-screen Pi.
     env = dict(os.environ)
-    env.pop("WAYLAND_DISPLAY", None)
+    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY_BLOCKER
     env.setdefault("DISPLAY", ":0")
     return subprocess.Popen(mpv_args(socket_path, input_conf, hwdec), env=env)
 
 
 def _default_connector(socket_path: str) -> MpvIpc:
     return MpvIpc(connect_unix(socket_path))
+
+
+def _run_command_text(args: Sequence[str]) -> str:
+    try:
+        result = subprocess.run(
+            list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip()
+
+
+class ForegroundGuard:
+    def __init__(
+        self,
+        interval: float = FOREGROUND_GUARD_INTERVAL,
+        runner: Callable[[Sequence[str]], str] = _run_command_text,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.interval = interval
+        self._runner = runner
+        self._clock = clock
+        self._next_check = self._clock() + self.interval
+
+    def reset(self) -> None:
+        self._next_check = self._clock() + self.interval
+
+    def maybe_raise(self, enabled: bool) -> None:
+        now = self._clock()
+        if not enabled:
+            self._next_check = now + self.interval
+            return
+        if now < self._next_check:
+            return
+        self._next_check = now + self.interval
+
+        wid = self._find_mpv_window()
+        if wid is None:
+            return
+        wid_text = str(wid)
+        wid_hex = f"0x{wid:x}"
+        self._runner(["wmctrl", "-i", "-r", wid_hex, "-b", "add,above"])
+        self._runner(["xdotool", "windowactivate", "--sync", wid_text])
+
+    def _find_mpv_window(self) -> Optional[int]:
+        for args in (
+            ["xdotool", "search", "--name", f"^{MPV_WINDOW_TITLE}$"],
+            ["xdotool", "search", "--class", "mpv"],
+        ):
+            wid = self._last_window_id(self._runner(args))
+            if wid is not None:
+                return wid
+        return None
+
+    @staticmethod
+    def _last_window_id(output: str) -> Optional[int]:
+        ids = [ForegroundGuard._window_id(line) for line in output.splitlines()]
+        ids = [wid for wid in ids if wid is not None]
+        return ids[-1] if ids else None
+
+    @staticmethod
+    def _window_id(value: str) -> Optional[int]:
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return int(value, 0)
+        except ValueError:
+            return None
 
 
 class PlayerController:
@@ -110,6 +192,7 @@ class PlayerController:
         connector: Callable[[str], MpvIpc] = _default_connector,
         clock: Callable[[], datetime] = datetime.now,
         web_port: int = 8080,
+        foreground_guard: Optional[ForegroundGuard] = None,
     ):
         self.store = store
         self.socket_path = socket_path
@@ -118,6 +201,7 @@ class PlayerController:
         self._launcher = launcher
         self._connector = connector
         self._clock = clock
+        self._foreground_guard = foreground_guard or ForegroundGuard()
         self._proc: Optional[subprocess.Popen] = None
         self._ipc: Optional[MpvIpc] = None
         self._last_id: Optional[str] = None
@@ -247,6 +331,7 @@ class PlayerController:
                                         self.store.get_settings().hwdec)
             self._ipc = self._connector(self.socket_path)
             self._maintenance = False
+            self._foreground_guard.reset()
             try:
                 self._ipc.command("observe_property", 1, "fullscreen")
             except Exception:
@@ -302,6 +387,8 @@ class PlayerController:
             self._ipc.command("set_property", "image-display-duration", dur)
         self._ipc.command("loadfile", str(self.store.media_dir / item.filename), "replace")
         while not self._stop.is_set():
+            self._foreground_guard.maybe_raise(
+                not self._maintenance and not self._blank and self._proc is not None)
             # Bail back to _run on a restart request (it owns teardown/relaunch)
             # or if mpv is gone, so we never spin against a dead/None ipc.
             if self._restart.is_set() or self._ipc is None:
@@ -324,6 +411,8 @@ class PlayerController:
                     self._teardown_mpv()
                 self._ensure_mpv()
                 self._update_ip_overlay()
+                self._foreground_guard.maybe_raise(
+                    not self._maintenance and not self._blank and self._proc is not None)
                 if self._maintenance:
                     self._pump_event(0.5)
                     continue

@@ -1,7 +1,8 @@
 from datetime import datetime
 from fleetsign.model import MediaItem
 from fleetsign.player import (select_next, PlayerController, format_ip_overlay,
-                            local_ip, mpv_args, default_launcher)
+                            local_ip, mpv_args, default_launcher, ForegroundGuard,
+                            MPV_WINDOW_TITLE, WAYLAND_DISPLAY_BLOCKER)
 from fleetsign.store import PlaylistStore
 
 NOW = datetime(2026, 6, 26, 12, 0)
@@ -185,6 +186,10 @@ def test_mpv_args_pins_window_on_top():
     # signage; this is honored only via XWayland (see default_launcher).
     assert "--ontop" in mpv_args("/sock", "/conf.conf", "auto-copy")
 
+def test_mpv_args_sets_stable_window_title():
+    args = mpv_args("/sock", "/conf.conf", "auto-copy")
+    assert f"--title={MPV_WINDOW_TITLE}" in args
+
 def test_default_launcher_passes_hwdec(monkeypatch):
     captured = {}
     monkeypatch.setattr("fleetsign.player.subprocess.Popen",
@@ -194,15 +199,64 @@ def test_default_launcher_passes_hwdec(monkeypatch):
 
 def test_default_launcher_forces_xwayland(monkeypatch):
     # --ontop is a no-op for a native Wayland client, so the launcher runs mpv
-    # under XWayland by clearing WAYLAND_DISPLAY and ensuring DISPLAY is set. On a
-    # real X11 session WAYLAND_DISPLAY is absent already, so this is a no-op there.
+    # under XWayland by making Wayland connection fail and ensuring DISPLAY is set.
     captured = {}
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setattr("fleetsign.player.subprocess.Popen",
                         lambda a, env=None: captured.update(args=a, env=env))
     default_launcher("/sock", "/conf.conf", "auto-copy")
-    assert "WAYLAND_DISPLAY" not in captured["env"]
+    assert captured["env"]["WAYLAND_DISPLAY"] == WAYLAND_DISPLAY_BLOCKER
     assert captured["env"].get("DISPLAY")
+
+def test_foreground_guard_waits_until_interval():
+    calls = []
+    now = [100.0]
+    guard = ForegroundGuard(interval=10.0, runner=lambda a: calls.append(a) or "",
+                            clock=lambda: now[0])
+    guard.maybe_raise(True)
+    assert calls == []
+    now[0] = 110.0
+    guard.maybe_raise(True)
+    assert calls[0] == ["xdotool", "search", "--name", f"^{MPV_WINDOW_TITLE}$"]
+
+def test_foreground_guard_reasserts_mpv_on_interval():
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+        if args[:3] == ["xdotool", "search", "--name"]:
+            return "123"
+        return ""
+
+    guard = ForegroundGuard(interval=10.0, runner=runner, clock=lambda: 10.0)
+    guard._next_check = 0.0
+    guard.maybe_raise(True)
+    assert ["wmctrl", "-i", "-r", "0x7b", "-b", "add,above"] in calls
+    assert ["xdotool", "windowactivate", "--sync", "123"] in calls
+
+def test_foreground_guard_raises_mpv_when_focus_was_stolen():
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+        if args[:3] == ["xdotool", "search", "--name"]:
+            return "123\n456"
+        return ""
+
+    guard = ForegroundGuard(interval=10.0, runner=runner, clock=lambda: 10.0)
+    guard._next_check = 0.0
+    guard.maybe_raise(True)
+    assert ["wmctrl", "-i", "-r", "0x1c8", "-b", "add,above"] in calls
+    assert ["xdotool", "windowactivate", "--sync", "456"] in calls
+
+def test_foreground_guard_disabled_in_maintenance():
+    calls = []
+    guard = ForegroundGuard(interval=10.0, runner=lambda a: calls.append(a) or "",
+                            clock=lambda: 20.0)
+    guard._next_check = 0.0
+    guard.maybe_raise(False)
+    assert calls == []
+    assert guard._next_check == 30.0
 
 def test_write_input_conf_binds_f12(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
