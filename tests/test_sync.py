@@ -445,6 +445,42 @@ def test_bad_media_fields_fail_whole_manifest(tmp_path):
         assert store.list_media() == []
 
 
+def test_type_mismatching_filename_fails_whole_manifest(tmp_path):
+    # `type` is one of the allowed strings but contradicts the file extension.
+    # _play_item only sets image-display-duration when type == "image", so an
+    # actual image arriving tagged "video" gets mpv's default duration and never
+    # advances -- the playlist stalls with no end-file. A type that is merely a
+    # valid string isn't enough: it must match what the filename classifies as.
+    store, media = make_store(tmp_path)
+    mismatches = [
+        dict(ITEM_A, filename="a.png", type="video"),   # image file tagged video
+        {"id": "v1", "filename": "clip.mp4", "type": "image",  # video file tagged image
+         "enabled": True, "image_duration": None, "schedule": None},
+    ]
+    for item in mismatches:
+        fname = item["filename"]
+        p = payload_for([item], {fname: {"size": 3, "mtime": 1000.0}})
+        client = SyncClient(store, cfg(), fetch=make_fetch(p, {fname: b"abc"}))
+        res = client.sync_once()
+        assert res.ok is False, f"type/filename mismatch accepted: {item!r}"
+        assert store.list_media() == []  # store not mutated
+        assert not (media / fname).exists()  # never made live
+
+
+def test_unsupported_extension_fails_whole_manifest(tmp_path):
+    # An unclassifiable extension can't be a valid image OR video, so no honest
+    # `type` exists for it. Reject rather than download a file the player can't
+    # meaningfully play (a name-safe basename alone isn't proof of a usable type).
+    store, media = make_store(tmp_path)
+    item = dict(ITEM_A, filename="a.txt", type="image")
+    p = payload_for([item], {"a.txt": {"size": 3, "mtime": 1000.0}})
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.txt": b"abc"}))
+    res = client.sync_once()
+    assert res.ok is False
+    assert store.list_media() == []
+    assert not (media / "a.txt").exists()
+
+
 def test_good_media_with_duration_and_video_still_syncs(tmp_path):
     # Guard against over-validation: legitimate items (a video, an image with a
     # real duration) must still pass.

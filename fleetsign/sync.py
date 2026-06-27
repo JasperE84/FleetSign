@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .model import MediaItem
+from .model import MediaItem, classify
 from .store import PlaylistStore, safe_unlink
 from .validate import positive_seconds
 
@@ -149,14 +149,18 @@ class SyncClient:
             # the write/os.utime path. The item fields matter because the player
             # trusts them: a non-"image" type on an actual image skips the
             # image-display-duration set, so mpv's default `inf` stalls the
-            # playlist with no end-file to advance on.
+            # playlist with no end-file to advance on. So `type` must match what
+            # the filename actually classifies as -- not merely be one of the two
+            # allowed strings -- which also rejects unclassifiable extensions
+            # (classify raises, caught below) that have no honest type at all.
             for m in media:
                 if not _is_safe_media_name(m.filename):
                     raise ValueError(f"unsafe filename: {m.filename!r}")
                 if not (isinstance(m.id, str) and m.id):
                     raise ValueError(f"bad id for {m.filename!r}")
-                if m.type not in ("image", "video"):
-                    raise ValueError(f"bad type {m.type!r} for {m.filename}")
+                if m.type != classify(m.filename):
+                    raise ValueError(
+                        f"type {m.type!r} does not match {m.filename}")
                 if not isinstance(m.enabled, bool):
                     raise ValueError(f"bad enabled flag for {m.filename}")
                 if m.image_duration is not None and not (

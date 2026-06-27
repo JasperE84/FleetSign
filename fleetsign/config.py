@@ -90,21 +90,25 @@ class AppConfig:
         self.save()
 
     def save(self) -> None:
-        d = {
-            "session_secret": self.session_secret,
-            "password_hash": self.password_hash,
-            "host": self.host,
-            "port": self.port,
-            "master_url": self.master_url,
-            "sync_token": self.sync_token,
-        }
-        blob = json.dumps(d, indent=2)
-        # Serialize under a lock so the temp file has a single writer, then swap
-        # it in atomically. Same discipline as the store's _save for
-        # manifest.json (one lock guarding the write); without it the SyncClient
-        # thread's set_password_hash could race a Waitress worker, garbling the
-        # shared temp or racing os.replace into a FileNotFoundError.
+        # Snapshot AND write under the lock. Two reasons it guards the whole body,
+        # not just the write: the temp file has a single writer (it shares a fixed
+        # config.json.tmp, so concurrent writers would garble it or race os.replace
+        # into a FileNotFoundError), and -- crucially -- the JSON snapshot is taken
+        # while holding the lock. Building it beforehand leaves a window where a
+        # concurrent save() completes in the gap, after which this older snapshot's
+        # os.replace overwrites the newer one (lost update: e.g. a SyncClient
+        # set_password_hash silently reverting a Waitress worker's become_master).
+        # Same atomic temp+replace discipline as the store's _save for manifest.json.
         with self._save_lock:
+            d = {
+                "session_secret": self.session_secret,
+                "password_hash": self.password_hash,
+                "host": self.host,
+                "port": self.port,
+                "master_url": self.master_url,
+                "sync_token": self.sync_token,
+            }
+            blob = json.dumps(d, indent=2)
             tmp = self.config_path.with_suffix(".json.tmp")
             tmp.write_text(blob, "utf-8")
             os.replace(tmp, self.config_path)

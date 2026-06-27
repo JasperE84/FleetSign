@@ -111,3 +111,27 @@ def test_save_is_serialized_under_lock(tmp_path, monkeypatch):
     # And the live file is always valid JSON, with no shared temp left behind.
     json.loads((tmp_path / "data" / "config.json").read_text("utf-8"))
     assert not (tmp_path / "data" / "config.json.tmp").exists()
+
+
+def test_save_snapshots_state_under_lock(tmp_path, monkeypatch):
+    # save() must serialize the JSON snapshot while holding _save_lock, not build
+    # it beforehand. Snapshotting outside the lock leaves a window where another
+    # thread's save() completes in the gap, after which this older snapshot's
+    # os.replace overwrites the newer one (a lost update -- e.g. a synced password
+    # silently reverts a concurrent become_master). Probe the serialization point
+    # and assert the lock is already held: deterministic, unlike racing two saves.
+    import fleetsign.config as configmod
+
+    cfg = AppConfig.load_or_create(tmp_path)
+    held_at_snapshot = []
+    real_dumps = configmod.json.dumps
+
+    def probe_dumps(*a, **k):
+        held_at_snapshot.append(cfg._save_lock.locked())
+        return real_dumps(*a, **k)
+
+    monkeypatch.setattr(configmod.json, "dumps", probe_dumps)
+    cfg.set_password_hash("h")
+
+    assert held_at_snapshot and all(held_at_snapshot), \
+        "snapshot serialized outside _save_lock -- lost-update window open"
