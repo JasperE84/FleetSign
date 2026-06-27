@@ -26,7 +26,18 @@ mkdir -p "$(dirname "$LABWC_AUTOSTART")"
 if [ ! -f "$LABWC_AUTOSTART" ] && [ -f /etc/xdg/labwc/autostart ]; then
     cp /etc/xdg/labwc/autostart "$LABWC_AUTOSTART"
 fi
+# Append our block, or migrate an older one that predates the DISPLAY import (added so
+# mpv can reach XWayland for always-on-top — see player.py). A current block is left
+# as-is, so re-runs/upgrades are idempotent.
 if ! grep -q "fleetsign.service" "$LABWC_AUTOSTART" 2>/dev/null; then
+    need_autostart=1
+elif ! grep -q "XDG_RUNTIME_DIR DISPLAY" "$LABWC_AUTOSTART"; then
+    sed -i '/# Start the FleetSign player (systemd --user manages restarts)/,+2d' "$LABWC_AUTOSTART"
+    need_autostart=1
+else
+    need_autostart=0
+fi
+if [ "$need_autostart" = 1 ]; then
     {
         echo ""
         echo "# Start the FleetSign player (systemd --user manages restarts)"
@@ -57,8 +68,12 @@ if [ ! -f "$LABWC_RC" ]; then
 XML
     fi
 fi
-if ! grep -q 'identifier="mpv"' "$LABWC_RC"; then
-    RULE='    <windowRule identifier="mpv" allowAlwaysOnTop="yes" />'
+# Add a FleetSign-owned always-on-top rule for mpv, keyed on our marker comment
+# rather than on "any mpv rule": (a) we still add ours when the user already has an
+# unrelated mpv windowRule (labwc applies both, so allowAlwaysOnTop still takes), and
+# (b) uninstall removes only this line, never a rule the user wrote.
+if ! grep -q 'FleetSign-managed' "$LABWC_RC"; then
+    RULE='    <windowRule identifier="mpv" allowAlwaysOnTop="yes" /> <!-- FleetSign-managed -->'
     if grep -q '<windowRules>' "$LABWC_RC"; then
         sed -i "s#<windowRules>#<windowRules>\n${RULE}#" "$LABWC_RC"
     elif grep -q '</labwc_config>' "$LABWC_RC"; then
@@ -77,8 +92,13 @@ if pgrep -x labwc >/dev/null 2>&1; then
     pkill -HUP labwc 2>/dev/null || true
 fi
 
-# Start now for this session; the labwc autostart handles subsequent logins/reboots.
-systemctl --user start fleetsign.service
+# (Re)start now for this session so an upgrade actually relaunches mpv with the
+# current code (XWayland + --ontop); plain `start` is a no-op when the daemon is
+# already running, leaving the old mpv up. `restart` also starts it if stopped.
+# Import the live session env first so the (re)started daemon can reach the display.
+# The labwc autostart handles subsequent logins/reboots.
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY 2>/dev/null || true
+systemctl --user restart fleetsign.service
 
 IP="$(hostname -I | awk '{print $1}')"
 echo "Installed. Open http://${IP}:8080 to set the admin password."

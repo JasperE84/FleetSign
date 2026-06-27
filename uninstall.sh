@@ -30,11 +30,12 @@ if [ -f "$LABWC_AUTOSTART" ] && grep -q "fleetsign.service" "$LABWC_AUTOSTART"; 
     echo "Removed FleetSign block from $LABWC_AUTOSTART"
 fi
 
-# Strip the always-on-top window rule install.sh injected. Other windowRules are
-# left alone; an emptied <windowRules> block (or the minimal rc.xml we may have
+# Strip the always-on-top rule install.sh injected, matched by our FleetSign marker
+# so we never delete an mpv windowRule the user wrote themselves. Other windowRules
+# are left alone; an emptied <windowRules> block (or the minimal rc.xml we may have
 # seeded, which still loads labwc's default keybinds) is harmless.
-if [ -f "$LABWC_RC" ] && grep -q 'identifier="mpv"' "$LABWC_RC"; then
-    sed -i '/identifier="mpv"/d' "$LABWC_RC"
+if [ -f "$LABWC_RC" ] && grep -q 'FleetSign-managed' "$LABWC_RC"; then
+    sed -i '/FleetSign-managed/d' "$LABWC_RC"
     echo "Removed FleetSign window rule from $LABWC_RC"
 fi
 

@@ -226,12 +226,13 @@ runs at session start with the Wayland environment available:
 
 ```bash
 # ~/.config/labwc/autostart
-systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR 2>/dev/null
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY 2>/dev/null
 systemctl --user start fleetsign.service
 ```
 
 The first line hands the running display's environment to the systemd user
-manager (so mpv can find the screen); the second starts the supervised unit.
+manager (so mpv can find the screen); `DISPLAY` is included because mpv renders
+through **XWayland** to stay always-on-top. The second starts the supervised unit.
 Autostart therefore **depends on this file** — remove the lines and the player
 won't come back after a reboot, even though `systemctl --user start fleetsign`
 still works by hand.
@@ -249,14 +250,15 @@ bash ~/fleetsign/install.sh
 The labwc file is specific to Raspberry Pi OS Bookworm's default (Wayland)
 session. On a different desktop, add the equivalent lines to **its** autostart
 and FleetSign starts the same way. The key step is always: import the session's
-display variable (`WAYLAND_DISPLAY` on Wayland, `DISPLAY` on X11) into the
-systemd user manager, then start the unit.
+display variables into the systemd user manager, then start the unit. On a Wayland
+session import **both** `WAYLAND_DISPLAY` and `DISPLAY` (mpv runs under XWayland for
+always-on-top); on X11, `DISPLAY`.
 
 | Session | Autostart location | Lines to add |
 |---|---|---|
-| labwc — Pi OS, Wayland (default) | `~/.config/labwc/autostart` | `systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR`<br>`systemctl --user start fleetsign.service` |
+| labwc — Pi OS, Wayland (default) | `~/.config/labwc/autostart` | `systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY`<br>`systemctl --user start fleetsign.service` |
 | X11 — openbox / LXDE (older Pi OS) | `~/.config/openbox/autostart` or `~/.config/lxsession/LXDE-pi/autostart` | `systemctl --user import-environment DISPLAY XDG_RUNTIME_DIR`<br>`systemctl --user start fleetsign.service` |
-| Any XDG-compliant desktop | `~/.config/autostart/fleetsign.desktop` | `Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR; systemctl --user start fleetsign.service'` |
+| Any XDG-compliant desktop | `~/.config/autostart/fleetsign.desktop` | `Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY; systemctl --user start fleetsign.service'` |
 
 The service unit itself is portable across desktops — only the autostart hook
 differs.
