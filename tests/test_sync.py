@@ -499,6 +499,93 @@ def test_good_media_with_duration_and_video_still_syncs(tmp_path):
     assert [m.filename for m in store.list_media()] == ["a.png", "clip.mp4"]
 
 
+def test_poisoned_mtime_fails_cleanly(tmp_path):
+    # A finite but absurd mtime passes the numeric check yet makes os.utime raise
+    # (OverflowError: out of range for time_t). That must fail the sync cleanly --
+    # drop the .tmp, leave the store untouched -- not propagate a raw exception and
+    # leave an un-pruned .tmp the next run keeps re-creating.
+    store, media = make_store(tmp_path)
+    p = payload_for([ITEM_A], {"a.png": {"size": 3, "mtime": 1e19}})
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+    res = client.sync_once()  # must not raise
+    assert res.ok is False
+    assert store.list_media() == []
+    assert not (media / "a.png").exists()       # not made live
+    assert not (media / "a.png.tmp").exists()   # partial cleaned up
+    assert client.last_error is not None
+
+
+def test_run_survives_sync_once_raising(tmp_path):
+    # Regression guard for the "never let the loop die" promise: a sync_once that
+    # RAISES (not just returns ok=False) must be swallowed, recorded, and retried
+    # on the short backoff.
+    store, media = make_store(tmp_path)
+    client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
+    waits = []
+    client._stop.wait = lambda d: (waits.append(d), client._stop.set())[1] and None
+
+    def boom():
+        raise RuntimeError("kaboom")
+    client.sync_once = boom               # type: ignore[assignment]
+    client._run()                          # must not propagate
+
+    assert waits == [15.0]
+    assert client.last_error == "kaboom"
+
+
+def test_run_survives_rng_raising(tmp_path):
+    # The guarantee must be structural, not merely a property of the injected
+    # callables: even if the delay computation itself raises, the loop recovers on
+    # the short backoff rather than letting the daemon's sync thread die silently.
+    store, media = make_store(tmp_path)
+    client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
+    waits = []
+    client._stop.wait = lambda d: (waits.append(d), client._stop.set())[1] and None
+    client.sync_once = lambda: SyncResult(ok=True)   # success path
+
+    def boom(a, b):
+        raise RuntimeError("rng down")
+    client._rng = boom                     # type: ignore[assignment]
+    client._run()                          # must not propagate
+
+    assert waits == [15.0]
+
+
+def test_bad_schedule_fails_whole_manifest(tmp_path):
+    # The web route validates schedules (weekday ints 0-6, HH:MM times); the sync
+    # boundary -- the more hostile input -- must match it. A garbage schedule that
+    # from_dict happens to accept (out-of-range days, unparseable/out-of-range
+    # times) must reject the WHOLE manifest, not be persisted as an item that
+    # silently goes permanently dark.
+    store, media = make_store(tmp_path)
+    bad_schedules = [
+        {"days": [0, 9], "start": "08:00", "end": "17:00"},   # weekday out of range
+        {"days": ["mon"], "start": "08:00", "end": "17:00"},  # non-int day
+        {"days": [0], "start": "8 oclock", "end": "17:00"},   # unparseable start
+        {"days": [0], "start": "08:00", "end": "25:00"},      # out-of-range time
+        {"days": "0", "start": "08:00", "end": "17:00"},      # days not a list of ints
+    ]
+    for sched in bad_schedules:
+        item = dict(ITEM_A, schedule=sched)
+        p = payload_for([item], {"a.png": {"size": 3, "mtime": 1000.0}})
+        client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+        res = client.sync_once()
+        assert res.ok is False, f"bad schedule accepted: {sched!r}"
+        assert store.list_media() == []  # store not mutated
+
+
+def test_valid_schedule_still_syncs(tmp_path):
+    # Guard against over-validation: a legitimate schedule must still pass.
+    store, media = make_store(tmp_path)
+    item = dict(ITEM_A, schedule={"days": [0, 4], "start": "08:00", "end": "17:00"})
+    p = payload_for([item], {"a.png": {"size": 3, "mtime": 1000.0}})
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+    res = client.sync_once()
+    assert res.ok is True
+    s = store.list_media()[0].schedule
+    assert s.days == [0, 4] and s.start == "08:00" and s.end == "17:00"
+
+
 def test_non_dict_settings_skips(tmp_path):
     store, media = make_store(tmp_path)
     for bad_settings in (None, ["default_image_duration", 8]):

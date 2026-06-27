@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from urllib.parse import quote
 
 from .model import MediaItem, classify
+from .schedule import parse_hhmm
 from .store import PlaylistStore, safe_unlink
 from .validate import positive_seconds
 
@@ -88,6 +89,24 @@ def _is_safe_media_name(name: object) -> bool:
 def _is_finite_number(v: object) -> bool:
     return (isinstance(v, (int, float)) and not isinstance(v, bool)
             and math.isfinite(v))
+
+
+def _is_valid_schedule(sch) -> bool:
+    """True only for a schedule the master could have produced via its web UI:
+    weekday ints in 0-6 and HH:MM start/end times. The sync channel is hostile,
+    so mirror the web route's validation here -- from_dict otherwise accepts
+    garbage values (out-of-range days, unparseable times) that is_active then
+    silently treats as permanently inactive, darkening an item with no error."""
+    if not isinstance(sch.days, list) or not all(
+            isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6
+            for d in sch.days):
+        return False
+    try:
+        parse_hhmm(sch.start)
+        parse_hhmm(sch.end)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 def _base_url(master_url: str) -> str:
@@ -167,6 +186,8 @@ class SyncClient:
                         _is_finite_number(m.image_duration)
                         and m.image_duration > 0):
                     raise ValueError(f"bad image_duration for {m.filename}")
+                if m.schedule is not None and not _is_valid_schedule(m.schedule):
+                    raise ValueError(f"bad schedule for {m.filename}")
                 meta = files.get(m.filename)
                 if not isinstance(meta, dict):
                     raise ValueError(f"missing file meta for {m.filename}")
@@ -210,8 +231,18 @@ class SyncClient:
                 msg = f"download {m.filename}: size {actual} != {meta['size']}"
                 self.last_error = msg
                 return SyncResult(ok=False, error=msg, downloaded=downloaded)
-            os.utime(tmp, (meta["mtime"], meta["mtime"]))
-            os.replace(tmp, dest)
+            # utime can raise on a finite-but-out-of-range mtime (OverflowError);
+            # treat finalize failure like the truncation case -- drop the .tmp and
+            # fail the sync -- so a raw exception can't escape and leave an
+            # un-pruned .tmp the next run keeps re-creating.
+            try:
+                os.utime(tmp, (meta["mtime"], meta["mtime"]))
+                os.replace(tmp, dest)
+            except (OSError, OverflowError) as e:
+                safe_unlink(tmp)
+                msg = f"finalize {m.filename}: {e}"
+                self.last_error = msg
+                return SyncResult(ok=False, error=msg, downloaded=downloaded)
             downloaded += 1
 
         # Only rewrite the manifest when content actually changed: the sync runs
@@ -257,10 +288,13 @@ class SyncClient:
         while not self._stop.is_set():
             try:
                 res = self.sync_once()
+                # Inside the try so the "never die" guarantee is structural, not a
+                # property of the injected callables: a raising _rng still recovers
+                # on the short backoff instead of killing the thread.
+                delay = self._rng(105.0, 135.0) if res.ok else 15.0
             except Exception as e:  # never let the loop die
                 self.last_error = str(e)
-                res = SyncResult(ok=False, error=str(e))
-            delay = self._rng(105.0, 135.0) if res.ok else 15.0
+                delay = 15.0
             self._stop.wait(delay)
 
 

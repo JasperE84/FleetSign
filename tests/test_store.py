@@ -48,6 +48,27 @@ def test_corrupt_manifest_recovers(tmp_path):
     assert store.list_media() == []
     assert json.loads((tmp_path / "manifest.json").read_text("utf-8"))["media"] == []
 
+
+def test_mistyped_manifest_recovers(tmp_path):
+    # Valid JSON, but a media item is structurally wrong: `schedule` is a string,
+    # or `days` is a non-iterable int. MediaItem/Schedule.from_dict then raise
+    # AttributeError/TypeError, which a too-narrow recovery `except` lets escape --
+    # crashing PlaylistStore on construction, and (under systemd Restart=always) a
+    # boot crash-loop. Must back up + reset, exactly like a syntactically-corrupt
+    # manifest.
+    media = tmp_path / "media"; media.mkdir()
+    manifest = tmp_path / "manifest.json"
+    for bad_media in (
+        [{"id": "a", "filename": "x.jpg", "type": "image", "schedule": "oops"}],
+        [{"id": "a", "filename": "x.jpg", "type": "image",
+          "schedule": {"days": 5, "start": "08:00", "end": "17:00"}}],
+    ):
+        manifest.write_text(json.dumps({"settings": {}, "media": bad_media}), "utf-8")
+        store = PlaylistStore(manifest, media)  # must not raise
+        assert store.list_media() == []
+        assert json.loads(manifest.read_text("utf-8"))["media"] == []
+        assert any(p.name.startswith("manifest.bad-") for p in tmp_path.iterdir())
+
 def test_settings_persist(tmp_path):
     store, media = make_store(tmp_path)
     store.set_settings(12.0, False, "no")

@@ -135,6 +135,9 @@ class ForegroundGuard:
         self._runner = runner
         self._clock = clock
         self._next_check = self._clock() + self.interval
+        # Latches True while we can't find the mpv window, so the warning fires
+        # once per outage (on transition) instead of every interval forever.
+        self._warned_missing = False
 
     def reset(self) -> None:
         self._next_check = self._clock() + self.interval
@@ -150,7 +153,23 @@ class ForegroundGuard:
 
         wid = self._find_mpv_window()
         if wid is None:
+            # Otherwise this fails silently: missing xdotool/wmctrl, an unmapped
+            # window, or an unreachable X server all yield no window and the guard
+            # just stops enforcing always-on-top with no trace. Log it once so the
+            # outage is diagnosable (see INSTALL.md troubleshooting). _ensure_mpv
+            # calls reset() on every relaunch, deferring the next check ~interval,
+            # so a fresh mpv has time to map before this would warn.
+            if not self._warned_missing:
+                self._warned_missing = True
+                logging.getLogger(__name__).warning(
+                    "ForegroundGuard cannot find the mpv window (xdotool/wmctrl "
+                    "installed? signage window mapped under XWayland?); "
+                    "always-on-top is not being enforced")
             return
+        if self._warned_missing:
+            self._warned_missing = False
+            logging.getLogger(__name__).info(
+                "ForegroundGuard reacquired the mpv window; always-on-top resumed")
         wid_text = str(wid)
         wid_hex = f"0x{wid:x}"
         self._runner(["wmctrl", "-i", "-r", wid_hex, "-b", "add,above"])

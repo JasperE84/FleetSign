@@ -37,7 +37,12 @@ class PlaylistStore:
             d = json.loads(self.manifest_path.read_text("utf-8"))
             self._settings = Settings.from_dict(d.get("settings", {}))
             self._media = [MediaItem.from_dict(m) for m in d.get("media", [])]
-        except (ValueError, KeyError, OSError):
+        except (ValueError, KeyError, OSError, TypeError, AttributeError):
+            # TypeError/AttributeError too: a valid-JSON but mistyped manifest
+            # (e.g. schedule a string, days a non-iterable) makes from_dict raise
+            # those, not ValueError -- and an uncaught one here crashes __init__
+            # into a systemd boot-loop instead of recovering. (sync.py's manifest
+            # validation catches the same pair for the same reason.)
             backup = self.manifest_path.with_suffix(f".bad-{int(time.time())}.json")
             try:
                 os.replace(self.manifest_path, backup)

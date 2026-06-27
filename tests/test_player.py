@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from fleetsign.model import MediaItem
 from fleetsign.player import (select_next, PlayerController, format_ip_overlay,
@@ -257,6 +258,37 @@ def test_foreground_guard_disabled_in_maintenance():
     guard.maybe_raise(False)
     assert calls == []
     assert guard._next_check == 30.0
+
+def test_foreground_guard_warns_once_when_window_missing(caplog):
+    # An empty runner means no window is ever found (missing tools / unmapped
+    # window / dead X). The guard must surface that once, not silently no-op.
+    guard = ForegroundGuard(interval=10.0, runner=lambda a: "", clock=lambda: 10.0)
+    with caplog.at_level(logging.WARNING, logger="fleetsign.player"):
+        guard._next_check = 0.0
+        guard.maybe_raise(True)
+        guard._next_check = 0.0  # next interval elapses; still missing
+        guard.maybe_raise(True)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+def test_foreground_guard_logs_recovery_after_window_returns(caplog):
+    state = {"found": False}
+
+    def runner(args):
+        if args[:3] == ["xdotool", "search", "--name"] and state["found"]:
+            return "123"
+        return ""
+
+    guard = ForegroundGuard(interval=10.0, runner=runner, clock=lambda: 10.0)
+    with caplog.at_level(logging.INFO, logger="fleetsign.player"):
+        guard._next_check = 0.0
+        guard.maybe_raise(True)        # missing -> one warning
+        state["found"] = True
+        guard._next_check = 0.0
+        guard.maybe_raise(True)        # back -> one recovery info
+    assert sum(r.levelno == logging.WARNING for r in caplog.records) == 1
+    assert any(r.levelno == logging.INFO and "reacquired" in r.getMessage()
+               for r in caplog.records)
 
 def test_write_input_conf_binds_f12(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)

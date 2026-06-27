@@ -15,7 +15,7 @@ This Python package replaces an earlier **Bash implementation** (feh/VLC driven 
 Everything runs from the repo root. No Pi or mpv is needed for the test suite — the player's mpv interaction is dependency-injected.
 
 ```bash
-python -m pytest                       # full suite (≈140 tests)
+python -m pytest                       # full suite (≈142 tests)
 python -m pytest tests/test_store.py -v # one file
 python -m pytest tests/test_player.py::test_select_next_cycles_active_only -v  # one test
 python -m fleetsign --root . --port 8080  # run the daemon locally (needs mpv on PATH for real playback)
