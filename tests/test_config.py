@@ -28,6 +28,50 @@ def test_malformed_config_recovers(tmp_path):
     assert cfg.session_secret  # regenerated
     json.loads((data / "config.json").read_text("utf-8"))  # file is valid JSON again
 
+def test_invalid_port_type_recovers_without_crashing(tmp_path):
+    # A hand-edited config with a non-numeric port must not crash __init__ into a
+    # systemd restart loop (the manifest loader already recovers this way). The
+    # port falls back to the default and the bad file is rewritten clean.
+    import json
+    data = tmp_path / "data"; data.mkdir(parents=True)
+    (data / "config.json").write_text(json.dumps({
+        "session_secret": "s" * 32, "sync_token": "t" * 16, "port": "not-a-number",
+    }), "utf-8")
+    cfg = AppConfig.load_or_create(tmp_path, port=8080)
+    assert cfg.port == 8080
+    assert json.loads((data / "config.json").read_text("utf-8"))["port"] == 8080
+
+
+def test_non_object_config_recovers(tmp_path):
+    # Valid JSON that isn't an object (a list or scalar) can't be .get()'d; treat
+    # it like a corrupt config instead of crashing on the attribute access.
+    import json
+    data = tmp_path / "data"; data.mkdir(parents=True)
+    (data / "config.json").write_text("[1, 2, 3]", "utf-8")
+    cfg = AppConfig.load_or_create(tmp_path)
+    assert cfg.is_configured() is False
+    assert cfg.session_secret
+    json.loads((data / "config.json").read_text("utf-8"))  # rewritten as an object
+
+
+def test_wrong_typed_fields_are_ignored(tmp_path):
+    # Non-string master_url / password_hash must not be trusted: a numeric
+    # master_url would make is_slave() true and then crash the sync thread on
+    # .strip(); a numeric password_hash would make is_configured() true and break
+    # check_password_hash. Both fall back to safe defaults.
+    import json
+    data = tmp_path / "data"; data.mkdir(parents=True)
+    (data / "config.json").write_text(json.dumps({
+        "session_secret": "s" * 32, "sync_token": "t" * 16,
+        "master_url": 123, "password_hash": 456,
+    }), "utf-8")
+    cfg = AppConfig.load_or_create(tmp_path)
+    assert cfg.is_slave() is False
+    assert cfg.is_configured() is False
+    assert cfg.master_url == ""
+    assert cfg.password_hash is None
+
+
 def test_config_json_omits_dead_dir_fields(tmp_path):
     import json
     AppConfig.load_or_create(tmp_path)

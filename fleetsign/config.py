@@ -39,6 +39,12 @@ class AppConfig:
         media_dir.mkdir(parents=True, exist_ok=True)
         data_dir.mkdir(parents=True, exist_ok=True)
         config_path = data_dir / "config.json"
+        # The store's manifest loader recovers a corrupt manifest rather than
+        # crashing __init__ into a systemd restart loop; config.json (hand-editable
+        # for recovery, see INSTALL.md) must be just as defensive. A wrong-typed
+        # field is ignored, not trusted or fatal; `recovered` triggers a clean
+        # rewrite so the bad file isn't re-coerced on every boot.
+        recovered = False
         d = {}
         if config_path.exists():
             try:
@@ -46,18 +52,47 @@ class AppConfig:
             except (ValueError, OSError) as e:
                 logger.warning("config.json unreadable (%s); using defaults", e)
                 d = {}
+        if not isinstance(d, dict):
+            # Valid JSON but not an object (a list or scalar) can't be .get()'d.
+            logger.warning("config.json is not a JSON object; using defaults")
+            d, recovered = {}, True
+
+        def _str(key):
+            # Accept only an actual string; a wrong-typed value (number, bool,
+            # list, null) is ignored so it can't crash startup or feed a non-string
+            # into Flask's secret_key, secrets.compare_digest, or URL parsing.
+            nonlocal recovered
+            v = d.get(key)
+            if v is None or isinstance(v, str):
+                return v
+            logger.warning("config.json field %r has unexpected type %s; ignoring",
+                           key, type(v).__name__)
+            recovered = True
+            return None
+
+        parsed_port = port
+        raw_port = d.get("port")
+        if raw_port is not None:
+            try:
+                parsed_port = int(raw_port)
+            except (TypeError, ValueError):
+                logger.warning("config.json has an invalid port (%r); using %d",
+                               raw_port, port)
+                recovered = True
+
         cfg = cls(
             config_path=config_path,
             media_dir=media_dir,
             data_dir=data_dir,
-            session_secret=d.get("session_secret") or secrets.token_hex(32),
-            password_hash=d.get("password_hash"),
-            host=d.get("host", host),
-            port=int(d.get("port", port)),
-            master_url=d.get("master_url", ""),
-            sync_token=d.get("sync_token") or secrets.token_hex(16),
+            session_secret=_str("session_secret") or secrets.token_hex(32),
+            password_hash=_str("password_hash"),
+            host=_str("host") or host,
+            port=parsed_port,
+            master_url=_str("master_url") or "",
+            sync_token=_str("sync_token") or secrets.token_hex(16),
         )
-        if not config_path.exists() or not d.get("session_secret") or not d.get("sync_token"):
+        if (not config_path.exists() or recovered
+                or not d.get("session_secret") or not d.get("sync_token")):
             cfg.save()
         return cfg
 
