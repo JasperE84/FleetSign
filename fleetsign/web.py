@@ -87,6 +87,13 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
         if not config.sync_token or not secrets.compare_digest(sent, config.sync_token):
             abort(403)
 
+    def _authorize_sync():
+        # Both /sync endpoints gate on the token and record the poll identically;
+        # keep them in lockstep through one entry point.
+        _check_sync_token()
+        fleet.record(request.remote_addr or "?", time.time(),
+                     version=request.headers.get("X-Sync-Version"))
+
     def login_required(f):
         @wraps(f)
         def wrapper(*a, **kw):
@@ -229,9 +236,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
 
     @app.route("/sync/manifest")
     def sync_manifest():
-        _check_sync_token()
-        fleet.record(request.remote_addr or "?", time.time(),
-                     version=request.headers.get("X-Sync-Version"))
+        _authorize_sync()
         payload = manifest_payload(store)
         # The UI password (a hash) rides along so slaves can require the same
         # login. This human-facing credential is distinct from the sync token
@@ -241,9 +246,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
 
     @app.route("/sync/media/<path:name>")
     def sync_media(name):
-        _check_sync_token()
-        fleet.record(request.remote_addr or "?", time.time(),
-                     version=request.headers.get("X-Sync-Version"))
+        _authorize_sync()
         return send_from_directory(store.media_dir, name)
 
     @app.route("/settings", methods=["POST"])

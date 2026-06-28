@@ -394,7 +394,7 @@ class PlayerController:
     def _pump_event(self, timeout: float) -> Optional[dict]:
         ev = self._ipc.get_event(timeout=timeout) if self._ipc else None
         if ev and ev.get("event") == "property-change" and ev.get("name") == "fullscreen":
-            maint = not bool(ev.get("data", True))
+            maint = not ev.get("data", True)
             if maint != self._maintenance:
                 self._maintenance = maint
                 if maint:
