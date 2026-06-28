@@ -19,6 +19,17 @@ It was built to drive information screens on gym walls, but nothing about it is
 gym-specific — it suits any setting that needs a few screens looping the same
 content: lobbies, retail, offices, classrooms, events, menus.
 
+<p align="center">
+  <a href="docs/images/screenshot-master-mode.png">
+    <img src="docs/images/screenshot-master-mode.png" width="600"
+         alt="The FleetSign master web UI — playlist with per-item durations and weekday/time schedules, plus add-media, settings, controls, maintenance, and fleet sync panels">
+  </a>
+  <br>
+  <em>The master web UI is the entire control surface — upload media, set per-image
+  durations and weekday/time schedules, reorder the playlist, run playback
+  controls, and manage the fleet from one password-protected page. (Click to enlarge.)</em>
+</p>
+
 ---
 
 ## Features
@@ -198,6 +209,17 @@ open its web UI once, choose *"This screen joins a master,"* and enter the
 master's address and the **sync token** shown on the master's *Screens & sync*
 card. Clone that slave's SD card to add more screens with no further setup. Full
 walkthrough (including failover) is in [INSTALL.md → Multiple screens](INSTALL.md#multiple-screens-master--slaves).
+
+<p align="center">
+  <a href="docs/images/screenshot-slave-mode.png">
+    <img src="docs/images/screenshot-slave-mode.png" width="640"
+         alt="The FleetSign slave web UI — mirroring status, playback controls, maintenance, local video-decoder setting, and the master connection with a Become master button">
+  </a>
+  <br>
+  <em>A slave runs a reduced UI: it shows what it's mirroring from the master and
+  the last sync, keeps local playback/maintenance controls and a per-Pi video
+  decoder, and can be promoted to master if the master fails. (Click to enlarge.)</em>
+</p>
 
 ---
 
