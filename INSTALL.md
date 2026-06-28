@@ -53,6 +53,34 @@ plus `python3-venv`.
 
 That's it. Add media and configure playback entirely from the web UI.
 
+## Set the time and time zone (required for schedules)
+
+Each player decides what to show from its own clock, so the date, time, and time
+zone must be correct on the master and on every slave. The scheduler picks which
+images and videos play in which time slots on which days; if a screen's clock or
+time zone is wrong, that screen runs the schedule against the wrong time, so
+items appear in the wrong slots or on the wrong days, or drop out of the loop
+entirely.
+
+A Raspberry Pi has no CMOS/RTC battery, so it does not keep time while powered
+off; it resyncs from an NTP time server on every boot. Each Pi must therefore
+have a reachable NTP server set, or its clock (and every schedule) starts wrong
+after a reboot. Raspberry Pi OS syncs through `systemd-timesyncd`; to point at a
+specific server, set the `NTP=` line in `/etc/systemd/timesyncd.conf` and run
+`sudo systemctl restart systemd-timesyncd`.
+
+On a Raspberry Pi, the time zone and time settings live under `raspi-config`. Run
+it from a shell:
+
+```bash
+sudo raspi-config
+```
+
+Choose Localisation Options → Timezone, select yours, then reboot. On other
+systems use your distro's tool (e.g. `sudo timedatectl set-timezone Europe/Amsterdam`,
+and confirm sync with `timedatectl`). The web UI's system-time panel shows each
+screen's clock and warns when it looks unset, so you can verify it afterward.
+
 ## Daily use (operator, web UI only)
 
 Everything is at `http://<pi-ip>:8080`:

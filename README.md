@@ -19,6 +19,11 @@ It was built to drive information screens on gym walls, but nothing about it is
 gym-specific. It suits any narrowcasting setup that needs a few screens looping
 the same content: lobbies, retail, offices, classrooms, events, menus.
 
+> **New to FleetSign? Read the [User Manual](docs/USER_MANUAL.md).** It is the
+> complete day-to-day guide to the web interface: first-time setup, uploading
+> media, scheduling by day and time, playback and maintenance controls, and
+> running a master/slave fleet.
+
 <p align="center">
   <a href="docs/images/screenshot-master-mode.png">
     <img src="docs/images/screenshot-master-mode.png" width="600"
@@ -183,7 +188,8 @@ the same network:
    bottom-right corner).
 2. On first visit you're sent to a setup page; choose the admin password.
    That single password is the only credential.
-3. Upload media and configure playback entirely from the web UI.
+3. Upload media and configure playback entirely from the web UI. See the
+   [User Manual](docs/USER_MANUAL.md) for a full walkthrough of every screen.
 
 Plain Debian or Ubuntu also use `apt`, so the installer's package, venv, and
 service steps run fine and it starts the service for the current session. But

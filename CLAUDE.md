@@ -34,6 +34,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org): `type(scope): s
 
 Examples (from this repo): `feat(sync): centralize sync authorization for endpoints` · `fix(player): avoid re-fullscreening live mpv on maintenance exit` · `docs: clarify master/slave version-skew behavior`.
 
+## Writing docs and prose (no AI prose)
+
+Keep a human-authored voice in user-facing text: Markdown docs (`README.md`, `INSTALL.md`), code comments, and commit bodies. No tell-tale AI prose.
+
+- **Punctuation.** No em-dashes or en-dashes. Use normal punctuation instead: a colon for a definition or list lead-in, parentheses for an aside, a comma or semicolon for a clause break, a plain hyphen for ranges (`Mon-Fri`, `09:00-17:00`). Compound-word hyphens (`always-on-top`) and Markdown `---` rules are fine.
+- **No decorative bold.** Keep bold for structure only (section headers, glossary/list-item term labels); drop mid-sentence emphasis like `**only**` or `**fullscreen**`.
+- **No AI flourishes.** Avoid "deliberately"/"purpose-built", "it's not just X, it's Y", ornamental rule-of-three lists, and editorializing section-enders. State the fact and move on.
+
 ## Architecture
 
 One process (`python -m fleetsign`, run by systemd `--user`, `Restart=always`) hosts cooperating parts sharing an in-process `PlaylistStore`. `__main__.py` picks the app by role: master → `web.create_app`; slave → `web.create_slave_app` + a `SyncClient` thread.
