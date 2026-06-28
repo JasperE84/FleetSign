@@ -1,7 +1,8 @@
 import json
 from fleetsign.store import PlaylistStore
 from fleetsign.sync import (manifest_payload, FleetTracker, SyncClient,
-                            SyncError, SyncResult, _base_url)
+                            SyncError, SyncResult, _base_url,
+                            friendly_sync_error)
 
 
 def make_store(tmp_path):
@@ -604,6 +605,42 @@ def test_valid_schedule_still_syncs(tmp_path):
     assert res.ok is True
     s = store.list_media()[0].schedule
     assert s.days == [0, 4] and s.start == "08:00" and s.end == "17:00"
+
+
+def test_friendly_sync_error_classifies_common_cases():
+    # The raw last_error is a Python exception string; the slave UI shows a
+    # plain-language summary so an operator can tell refused/timeout/bad-auth
+    # apart without reading errno strings.
+    assert friendly_sync_error(None) is None
+    assert friendly_sync_error("") is None
+    assert friendly_sync_error("some unrecognised failure xyz") is None
+    assert "refused" in friendly_sync_error(
+        "<urlopen error [Errno 111] Connection refused>").lower()
+    assert "responding" in friendly_sync_error(
+        "<urlopen error timed out>").lower()
+    assert "token" in friendly_sync_error("HTTP Error 403: Forbidden").lower()
+    assert "resolve" in friendly_sync_error(
+        "<urlopen error [Errno -2] Name or service not known>").lower()
+    assert "network" in friendly_sync_error(
+        "<urlopen error [Errno 113] No route to host>").lower()
+    assert "rejected" in friendly_sync_error(
+        "manifest: bad manifest shape").lower()
+
+
+def test_last_attempt_recorded_on_success_and_failure(tmp_path):
+    # last_sync is "last success"; last_attempt is "last time we tried at all",
+    # so the waiting page (never synced) can still show when it last attempted.
+    store, media = make_store(tmp_path)
+    ok = SyncClient(store, cfg(), fetch=make_fetch(payload_for([], {}), {}),
+                    clock=lambda: 500.0)
+    ok.sync_once()
+    assert ok.last_attempt == 500.0 and ok.last_sync == 500.0
+
+    bad = SyncClient(store, cfg(), fetch=lambda u, t: b"{ not json",
+                     clock=lambda: 700.0)
+    bad.sync_once()
+    assert bad.last_attempt == 700.0   # recorded even though the attempt failed
+    assert bad.last_sync is None       # failure did not advance last_sync
 
 
 def test_non_dict_settings_skips(tmp_path):

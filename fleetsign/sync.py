@@ -49,6 +49,35 @@ class SyncError(Exception):
     pass
 
 
+def friendly_sync_error(raw: Optional[str]) -> Optional[str]:
+    """Turn a raw sync error (a Python exception string) into a plain-language
+    summary for the slave UI, or None when nothing recognisable matches (the UI
+    then shows only the raw detail). Pure and case-insensitive so an operator can
+    distinguish refused / timeout / bad-token at a glance without reading errno
+    strings. Network causes are checked before payload ones: a download that
+    itself fails to connect should read as 'refused', not 'data rejected'."""
+    if not raw:
+        return None
+    low = raw.lower()
+    if "connection refused" in low:
+        return ("Connection refused — the master may be offline, or its "
+                "address/port is wrong.")
+    if "timed out" in low or "timeout" in low:
+        return ("Timed out — the master isn't responding (check the address "
+                "and network).")
+    if "403" in low or "forbidden" in low:
+        return "Authentication failed — the sync token is likely wrong."
+    if ("name or service" in low or "getaddrinfo" in low
+            or "name resolution" in low or "nodename" in low):
+        return "Can't resolve that address — check the master IP/hostname."
+    if "no route to host" in low or "network is unreachable" in low:
+        return "No route to the master — is it on the same network?"
+    if low.startswith("manifest:") or "!=" in low:
+        return ("Reached the master, but its response was rejected "
+                "(data or version mismatch).")
+    return None
+
+
 @dataclass
 class SyncResult:
     ok: bool
@@ -151,11 +180,15 @@ class SyncClient:
         self._clock = clock
         self._rng = rng
         self.last_sync: Optional[float] = None
+        self.last_attempt: Optional[float] = None
         self.last_error: Optional[str] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def sync_once(self) -> SyncResult:
+        # Record the attempt up-front so the UI can show "last tried" even on a
+        # slave that has never had a successful sync (last_sync stays None).
+        self.last_attempt = self._clock()
         base = _base_url(self.config.master_url)
         token = self.config.sync_token
         try:

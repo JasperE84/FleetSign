@@ -36,6 +36,16 @@ def test_login_required_after_setup(client):
     assert ok.status_code == 302  # -> index
     assert c.get("/").status_code == 200
 
+def test_setup_join_mode_hides_password_field(client):
+    # A slave gets its admin password from the master on first sync, so the join
+    # form must NOT ask for one. The password input lives in a master-only block
+    # the "join" radio hides, leaving just master URL + token.
+    c, _ = client
+    body = c.get("/setup").get_data(as_text=True)
+    assert 'id="masterfields"' in body                  # wrapper around password
+    assert "getElementById('masterfields')" in body     # join radio toggles it
+
+
 def test_upload_limit_allows_large_videos(client):
     c, _ = client
     from fleetsign.web import MAX_UPLOAD_BYTES

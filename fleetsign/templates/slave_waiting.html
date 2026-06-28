@@ -12,6 +12,15 @@
     <p class="hint">Waiting for the first sync from the master, which delivers its
       settings and the login password. This page unlocks once that sync completes.</p>
 
+    {% if last_error %}
+    <div class="warn-banner">
+      ⚠ Can't reach the master yet{% if last_error_friendly %} — {{ last_error_friendly }}{% endif %}
+      <div class="hint" style="margin-top:6px">
+        {% if last_attempt %}Last attempt: {{ last_attempt }} · {% endif %}Details: {{ last_error }}
+      </div>
+    </div>
+    {% endif %}
+
     <details>
       <summary class="hint">Not connecting? Fix the master address or token…</summary>
       <form class="row" method="post" action="{{ url_for('local_connection') }}">

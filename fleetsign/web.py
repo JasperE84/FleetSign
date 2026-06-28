@@ -16,7 +16,7 @@ from .config import AppConfig
 from .model import HWDEC_CHOICES, Schedule, is_supported
 from .schedule import parse_hhmm
 from .store import PlaylistStore
-from .sync import FleetTracker, manifest_payload
+from .sync import FleetTracker, friendly_sync_error, manifest_payload
 from .validate import positive_seconds as _positive_seconds
 
 MAX_UPLOAD_BYTES = 4 * 1024**3  # 4 GiB — accept large videos (well over 250 MB)
@@ -42,6 +42,19 @@ def _clock_status() -> dict:
 
 def _clamp_hwdec(raw: str) -> str:
     return raw if raw in HWDEC_CHOICES else "auto-copy"
+
+
+def _fmt_ts(epoch):
+    # SyncClient timestamps are raw epoch floats; format them for display. None
+    # (never synced / never attempted) and any out-of-range value become None so
+    # the template can fall back to 'never'.
+    if not epoch:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def unique_path(media_dir: Path, name: str) -> Path:
@@ -306,6 +319,17 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
     app.secret_key = config.session_secret
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
+    def _render_waiting():
+        # Built once and shared by both render sites (login_required + login) so
+        # the pre-sync page always surfaces WHY it can't connect (refused/timeout/
+        # bad token) instead of a blank "waiting", with the raw detail kept too.
+        return render_template(
+            "slave_waiting.html",
+            master_url=config.master_url,
+            last_error=sync_client.last_error,
+            last_error_friendly=friendly_sync_error(sync_client.last_error),
+            last_attempt=_fmt_ts(sync_client.last_attempt))
+
     def login_required(f):
         @wraps(f)
         def wrapper(*a, **kw):
@@ -313,8 +337,7 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
             # slave has none, so show the waiting page (which itself offers the
             # recovery controls below, but no content and no sync token).
             if not config.is_configured():
-                return render_template("slave_waiting.html",
-                                       master_url=config.master_url)
+                return _render_waiting()
             if not session.get("authed"):
                 return redirect(url_for("login"))
             return f(*a, **kw)
@@ -336,8 +359,7 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if not config.is_configured():
-            return render_template("slave_waiting.html",
-                                   master_url=config.master_url)
+            return _render_waiting()
         if request.method == "POST":
             if config.check_password(request.form.get("password", "")):
                 session["authed"] = True
@@ -359,8 +381,11 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
                                sync_token=config.sync_token,
                                settings=store.get_settings(),
                                item_count=len(store.list_media()),
-                               last_sync=sync_client.last_sync,
-                               last_error=sync_client.last_error)
+                               last_sync=_fmt_ts(sync_client.last_sync),
+                               last_attempt=_fmt_ts(sync_client.last_attempt),
+                               last_error=sync_client.last_error,
+                               last_error_friendly=friendly_sync_error(
+                                   sync_client.last_error))
 
     @app.route("/local/hwdec", methods=["POST"])
     @login_required
@@ -399,7 +424,9 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
             **_clock_status(),
             "item_count": len(store.list_media()),
             "last_sync": sync_client.last_sync,
+            "last_sync_text": _fmt_ts(sync_client.last_sync),
             "last_error": sync_client.last_error,
+            "last_error_friendly": friendly_sync_error(sync_client.last_error),
         })
 
     return app

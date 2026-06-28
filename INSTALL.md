@@ -190,15 +190,18 @@ rm -rf ~/fleetsign           # removes media, playlist/state, and config — bac
   failure that large usually means the Pi's SD card is full (`df -h`).
 - **A slave isn't mirroring (multi-screen).** Open the slave's own page (read its
   IP off the screen's bottom-right overlay). If it shows a **"waiting for first
-  sync"** page, it has never synced — confirm its **sync token** matches the
-  master's and that it can reach the master's IP and port. If the master address or
-  token was entered wrong, you don't need to re-flash or edit files: on that same
-  waiting page expand **"Not connecting? Fix the master address or token…"** and
-  correct them, or choose **Become master** to promote this Pi instead. A corrected
-  address takes effect on the next poll (~2 minutes, or ~15 s after a failed
-  attempt). Once it has synced, log in with the **master password** and check
-  **Last sync** and any error there. The master's **Screens & sync** card should
-  list the slave within ~2 minutes of it polling.
+  sync"** page, it has never synced. That page now shows the **connection error**
+  in plain language — e.g. *connection refused* (master off, or wrong address/port),
+  *timed out* (master unreachable on the network), or *authentication failed* (the
+  **sync token** is wrong) — with the raw error underneath, so you can tell the
+  causes apart at a glance. Correct the master address or token right there by
+  expanding **"Not connecting? Fix the master address or token…"**, or choose
+  **Become master** to promote this Pi instead — no re-flash or file edits needed.
+  A corrected address takes effect on the next poll (~2 minutes, or ~15 s after a
+  failed attempt). Once it has synced, log in with the **master password**; the
+  status page keeps showing the same connection error if a later sync fails. The
+  master's **Screens & sync** card should list the slave within ~2 minutes of it
+  polling.
 
 ## Where things live
 
@@ -227,7 +230,9 @@ web UI; every other Pi is a **slave** that pulls and displays the same playlist.
 ### 2. First slave
 1. Install on a second Pi. Open its web UI once.
 2. On the setup screen choose **"This screen joins a master"** and enter the
-   master's static IP (e.g. `192.168.1.50:8080`) and the sync token.
+   master's static IP (e.g. `192.168.1.50:8080`) and the sync token. A joining
+   screen needs **no admin password** — it receives the master's on the first
+   sync — so the form asks only for the address and token.
 3. It restarts as a screen and begins mirroring within ~2 minutes. Each screen
    shows its own `http://<ip>:<port>` in the bottom-right corner.
 

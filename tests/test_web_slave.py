@@ -25,6 +25,7 @@ def _build_slave(tmp_path, *, with_password=True):
     app = create_slave_app(store, config, ctrl, sync,
                            restarter=lambda: called.append(1))
     app.config.update(TESTING=True)
+    app.sync_client = sync  # test-only handle so a test can inject sync state
     return app.test_client(), store, config, ctrl, called
 
 
@@ -62,6 +63,41 @@ def test_slave_waiting_page_offers_recovery_but_hides_token(tmp_path):
     assert "wait" in body.lower()
     assert "S3cret-unique-zzz" not in body           # token value NOT rendered
     assert "Become master" in body                   # recovery now available
+
+
+def test_slave_waiting_page_shows_connection_error(tmp_path):
+    # Before the first sync the waiting page must surface WHY it can't connect,
+    # so an operator sees refused/timeout/bad-auth instead of a blank "waiting".
+    c, store, config, ctrl, called = _build_slave(tmp_path, with_password=False)
+    c.application.sync_client.last_error = "HTTP Error 403: Forbidden"
+    body = c.get("/").get_data(as_text=True)
+    assert "token" in body.lower()                  # plain-language summary
+    assert "HTTP Error 403: Forbidden" in body      # raw detail kept too
+
+
+def test_slave_waiting_page_escapes_raw_error(tmp_path):
+    # The raw error is master-influenced (e.g. a rejected filename echoed back),
+    # so it must be HTML-escaped, never rendered as live markup.
+    c, store, config, ctrl, called = _build_slave(tmp_path, with_password=False)
+    c.application.sync_client.last_error = "manifest: bad name '<script>x</script>'"
+    body = c.get("/").get_data(as_text=True)
+    assert "<script>x</script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_slave_status_json_includes_friendly_error(slave):
+    c, *_ = slave
+    c.application.sync_client.last_error = "<urlopen error [Errno 111] Connection refused>"
+    data = c.get("/status").get_json()
+    assert "refused" in (data["last_error_friendly"] or "").lower()
+    assert data["last_error"] == "<urlopen error [Errno 111] Connection refused>"
+
+
+def test_slave_status_page_shows_friendly_error(slave):
+    c, *_ = slave
+    c.application.sync_client.last_error = "<urlopen error timed out>"
+    body = c.get("/").get_data(as_text=True)
+    assert "responding" in body.lower()   # friendly line on the status card
 
 
 def test_slave_preconfig_become_master_works(tmp_path):

@@ -4,7 +4,7 @@
 
 ![Platform: Linux](https://img.shields.io/badge/platform-Raspberry%20Pi%20%7C%20Debian%20%7C%20Ubuntu-c51a4a)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Tests: 142 passing](https://img.shields.io/badge/tests-142%20passing-success)
+![Tests: 159 passing](https://img.shields.io/badge/tests-159%20passing-success)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)
 
 FleetSign turns a small Linux box — a Raspberry Pi, or any Debian/Ubuntu
@@ -275,7 +275,7 @@ interactions are dependency-injected, so the suite runs on any platform
 (including Windows/CI).
 
 ```bash
-python -m pytest                         # full suite (~142 tests)
+python -m pytest                         # full suite (~159 tests)
 python -m pytest tests/test_store.py -v   # one file
 python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv for real playback)
 ```

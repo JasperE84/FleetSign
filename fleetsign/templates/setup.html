@@ -7,15 +7,18 @@
 </head><body class="auth">
   <div class="card">
     <h1><span class="dot"></span> FleetSign</h1>
-    <p class="hint" style="text-align:center; margin-top:-8px">Choose an admin password to get started.</p>
+    <p class="hint" style="text-align:center; margin-top:-8px">Set up this player as the master, or join it to an existing one.</p>
     {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
     <form method="post" action="{{ url_for('setup') }}">
-      <label><input type="radio" name="mode" value="master" checked onclick="document.getElementById('join').style.display='none'"> This is the master</label>
-      <label><input type="radio" name="mode" value="join" onclick="document.getElementById('join').style.display='block'"> This screen joins a master</label>
-      <input type="password" name="password" placeholder="Admin password (min 4 characters)">
+      <label><input type="radio" name="mode" value="master" checked onclick="document.getElementById('join').style.display='none';document.getElementById('masterfields').style.display='block'"> This is the master</label>
+      <label><input type="radio" name="mode" value="join" onclick="document.getElementById('join').style.display='block';document.getElementById('masterfields').style.display='none'"> This screen joins a master</label>
+      <div id="masterfields">
+        <input type="password" name="password" placeholder="Admin password (min 4 characters)">
+      </div>
       <div id="join" style="display:none">
         <input type="text" name="master_url" placeholder="Master IP, e.g. 192.168.1.50:8080">
         <input type="text" name="sync_token" placeholder="Sync token (from the master's page)">
+        <p class="hint" style="margin:0">A joining screen gets its admin password from the master on the first sync — you only need the token here.</p>
       </div>
       <button type="submit">Save &amp; continue</button>
     </form>

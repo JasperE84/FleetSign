@@ -14,14 +14,21 @@
   <main class="container">
     {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
 
-    <h1>This Pi is a screen</h1>
+    <h1>This screen is in slave mode</h1>
     <section class="card">
       <h2>Mirroring</h2>
       <p>Master: <strong>{{ master_url }}</strong></p>
       <p class="hint">Items: {{ item_count }} ·
         Last sync: <span id="lastsync">{{ last_sync or 'never' }}</span>
-        {% if last_error %}· <span class="pill off">error: {{ last_error }}</span>{% endif %}
       </p>
+      {% if last_error %}
+      <div class="warn-banner">
+        ⚠ Sync error{% if last_error_friendly %} — {{ last_error_friendly }}{% endif %}
+        <div class="hint" style="margin-top:6px">
+          {% if last_attempt %}Last attempt: {{ last_attempt }} · {% endif %}Details: {{ last_error }}
+        </div>
+      </div>
+      {% endif %}
     </section>
 
     <div class="grid2">
@@ -55,9 +62,9 @@
   function refreshStatus() {
     fetch("{{ url_for('status') }}").then(function (r) { return r.json(); }).then(function (s) {
       var txt = s.now + "  ·  " + s.weekday + ", " + s.tz;
-      if (s.last_error) txt += "  ·  SYNC ERROR";
+      if (s.last_error) txt += "  ·  " + (s.last_error_friendly || "SYNC ERROR");
       document.getElementById("status").textContent = txt;
-      if (s.last_sync) document.getElementById("lastsync").textContent = s.last_sync;
+      if (s.last_sync_text) document.getElementById("lastsync").textContent = s.last_sync_text;
     }).catch(function () {});
   }
   refreshStatus();
