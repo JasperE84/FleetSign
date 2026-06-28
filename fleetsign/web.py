@@ -222,7 +222,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
     @login_required
     def settings():
         try:
-            duration = _positive_seconds(request.form.get("default_image_duration", "8"))
+            duration = _positive_seconds(request.form.get("default_image_duration", "20"))
         except ValueError:
             flash("Default image seconds must be a positive number.")
             return redirect(url_for("index"))

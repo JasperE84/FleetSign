@@ -19,7 +19,7 @@ def test_media_item_roundtrip():
 
 def test_settings_defaults():
     s = Settings.from_dict({})
-    assert s.default_image_duration == 8.0 and s.muted is True and s.hwdec == "auto-copy"
+    assert s.default_image_duration == 20.0 and s.muted is True and s.hwdec == "auto-copy"
 
 def test_settings_roundtrip():
     s = Settings(default_image_duration=10.0, muted=False, hwdec="no")

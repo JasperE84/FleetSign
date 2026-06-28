@@ -59,14 +59,14 @@ def test_bad_settings_duration_is_rejected_not_500(ctx):
     c, store, _, _ = ctx
     r = c.post("/settings", data={"default_image_duration": "abc"}, follow_redirects=False)
     assert r.status_code == 302  # flashed + redirect, not a 500
-    assert store.get_settings().default_image_duration == 8.0  # unchanged default
+    assert store.get_settings().default_image_duration == 20.0  # unchanged default
 
 def test_nonpositive_settings_duration_is_rejected(ctx):
     c, store, _, _ = ctx
     for bad in ("0", "-1", "inf", "nan"):
         r = c.post("/settings", data={"default_image_duration": bad}, follow_redirects=False)
         assert r.status_code == 302
-        assert store.get_settings().default_image_duration == 8.0  # unchanged
+        assert store.get_settings().default_image_duration == 20.0  # unchanged
 
 def test_settings_hwdec_change_restarts(ctx):
     c, store, _, ctrl = ctx

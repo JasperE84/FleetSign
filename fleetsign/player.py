@@ -406,8 +406,6 @@ class PlayerController:
             self._ipc.command("set_property", "image-display-duration", dur)
         self._ipc.command("loadfile", str(self.store.media_dir / item.filename), "replace")
         while not self._stop.is_set():
-            self._foreground_guard.maybe_raise(
-                not self._maintenance and not self._blank and self._proc is not None)
             # Bail back to _run on a restart request (it owns teardown/relaunch)
             # or if mpv is gone, so we never spin against a dead/None ipc.
             if self._restart.is_set() or self._ipc is None:
@@ -419,6 +417,15 @@ class PlayerController:
                 return
             if self._proc is not None and self._proc.poll() is not None:
                 return
+            # Reassert always-on-top only AFTER pumping events and the blank/
+            # maintenance checks above: a pending F12 (fullscreen-off) event is
+            # processed by _pump_event and flips _maintenance first, so the guard
+            # never raises mpv on the very iteration the operator drops to the
+            # desktop. Raising at the top of the loop would fire one reassert
+            # against the about-to-be-stale "playing" state — the signage window
+            # jumping back on top exactly as maintenance begins.
+            self._foreground_guard.maybe_raise(
+                not self._maintenance and not self._blank and self._proc is not None)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -430,8 +437,6 @@ class PlayerController:
                     self._teardown_mpv()
                 self._ensure_mpv()
                 self._update_ip_overlay()
-                self._foreground_guard.maybe_raise(
-                    not self._maintenance and not self._blank and self._proc is not None)
                 if self._maintenance:
                     self._pump_event(0.5)
                     continue
@@ -444,6 +449,12 @@ class PlayerController:
                     # flash on resume. Pumping it here keeps resume clean.
                     self._pump_event(0.5)
                     continue
+                # Past the maintenance/blank guards above, so the guard is reached
+                # only while actually playing (or idle with no active item) — never
+                # on a maintenance/blank iteration. Keeps the always-on-top reassert
+                # off the moment maintenance/blank begins.
+                self._foreground_guard.maybe_raise(
+                    not self._maintenance and not self._blank and self._proc is not None)
                 item = select_next(self.store.list_media(), self._clock(), self._last_id)
                 if item is None:
                     self._stop.wait(1.0)

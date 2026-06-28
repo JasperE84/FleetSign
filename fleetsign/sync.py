@@ -11,7 +11,9 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
+
+DEFAULT_MASTER_PORT = 8080
 
 from .model import MediaItem, classify
 from .schedule import parse_hhmm
@@ -113,6 +115,19 @@ def _base_url(master_url: str) -> str:
     u = master_url.strip()
     if not u.startswith(("http://", "https://")):
         u = "http://" + u
+    # Operators type a bare "192.168.1.50" in the join form, but the master
+    # serves on 8080 (see __main__/install.sh), so a portless http URL resolves
+    # to port 80 where nothing listens and the sync silently never connects.
+    # Supply the default port when none was given. https is left untouched —
+    # explicit TLS implies its own default (443), so don't force 8080 onto it.
+    parts = urlsplit(u)
+    try:
+        has_port = parts.port is not None
+    except ValueError:
+        has_port = True  # malformed port: leave the operator's value as typed
+    if parts.scheme == "http" and parts.hostname and not has_port:
+        parts = parts._replace(netloc=f"{parts.netloc}:{DEFAULT_MASTER_PORT}")
+        u = urlunsplit(parts)
     return u.rstrip("/")
 
 

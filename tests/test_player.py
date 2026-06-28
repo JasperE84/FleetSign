@@ -259,6 +259,51 @@ def test_foreground_guard_disabled_in_maintenance():
     assert calls == []
     assert guard._next_check == 30.0
 
+def test_guard_not_raised_on_iteration_that_enters_maintenance(tmp_path):
+    # Regression: entering maintenance (F12 = property-change fullscreen False, or a
+    # web worker flipping _maintenance) must not let the foreground guard reassert
+    # mpv on top on the very loop iteration the transition is detected. Otherwise
+    # the signage window jumps to the foreground exactly as the operator drops to
+    # the desktop — "the reclaim focus timer is still active in maintenance".
+    media = tmp_path / "media"; media.mkdir()
+    (media / "a.png").write_bytes(b"x")
+    store = PlaylistStore(tmp_path / "manifest.json", media)
+    store.add_media("a.png")
+
+    raises = []
+    def runner(args):
+        a = list(args)
+        if a[:1] == ["wmctrl"] or a[:2] == ["xdotool", "windowactivate"]:
+            raises.append(a)
+        if a[:3] == ["xdotool", "search", "--name"]:
+            return "123"
+        return ""
+
+    guard = ForegroundGuard(interval=10.0, runner=runner, clock=lambda: 100.0)
+    guard._next_check = 0.0  # guard is overdue, so it WOULD fire if asked
+
+    class Ipc:
+        def __init__(self):
+            self.calls = []
+            self.events = [{"event": "property-change", "name": "fullscreen", "data": False}]
+        def command(self, *a, timeout=5.0):
+            self.calls.append(a); return {"error": "success"}
+        def get_event(self, timeout):
+            return self.events.pop(0) if self.events else {"event": "end-file"}
+        def close(self): pass
+
+    class AliveProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"), foreground_guard=guard)
+    ctrl._ipc = Ipc()
+    ctrl._proc = AliveProc()
+    ctrl._play_item(store.list_media()[0])
+
+    assert ctrl.is_maintenance() is True
+    assert raises == [], f"guard reasserted mpv while entering maintenance: {raises}"
+
 def test_foreground_guard_warns_once_when_window_missing(caplog):
     # An empty runner means no window is ever found (missing tools / unmapped
     # window / dead X). The guard must surface that once, not silently no-op.

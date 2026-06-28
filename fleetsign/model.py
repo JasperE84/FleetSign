@@ -84,7 +84,7 @@ HWDEC_CHOICES = ("auto-copy", "no", "auto")
 
 @dataclass
 class Settings:
-    default_image_duration: float = 8.0
+    default_image_duration: float = 20.0
     muted: bool = True
     hwdec: str = "auto-copy"
 
@@ -98,7 +98,7 @@ class Settings:
     @staticmethod
     def from_dict(d: dict) -> "Settings":
         return Settings(
-            default_image_duration=d.get("default_image_duration", 8.0),
+            default_image_duration=d.get("default_image_duration", 20.0),
             muted=d.get("muted", True),
             hwdec=d.get("hwdec", "auto-copy"),
         )

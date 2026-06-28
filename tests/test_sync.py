@@ -1,6 +1,7 @@
 import json
 from fleetsign.store import PlaylistStore
-from fleetsign.sync import manifest_payload, FleetTracker, SyncClient, SyncError, SyncResult
+from fleetsign.sync import (manifest_payload, FleetTracker, SyncClient,
+                            SyncError, SyncResult, _base_url)
 
 
 def make_store(tmp_path):
@@ -16,7 +17,7 @@ def test_manifest_payload_shape(tmp_path):
 
     p = manifest_payload(store)
 
-    assert p["settings"] == {"default_image_duration": 8.0, "muted": True}
+    assert p["settings"] == {"default_image_duration": 20.0, "muted": True}
     assert "hwdec" not in p["settings"]
     assert p["media"][0]["filename"] == "a.png"
     assert p["files"]["a.png"]["size"] == 3
@@ -54,6 +55,25 @@ def test_fleet_record_updates_timestamp():
     f.record("9.9.9.9", 1000.0)
     f.record("9.9.9.9", 1490.0)  # same ip, refreshed
     assert f.recent(1500.0, window=300.0) == ["9.9.9.9"]
+
+
+def test_base_url_adds_scheme_and_default_port_when_missing():
+    # Operators type a bare "192.168.1.50"; the master serves on 8080, so a
+    # portless http URL would hit port 80 and silently never connect.
+    assert _base_url("192.168.85.84") == "http://192.168.85.84:8080"
+    assert _base_url("http://192.168.85.84") == "http://192.168.85.84:8080"
+    assert _base_url("  192.168.85.84/  ") == "http://192.168.85.84:8080"
+
+
+def test_base_url_preserves_explicit_port():
+    assert _base_url("192.168.85.84:9000") == "http://192.168.85.84:9000"
+    assert _base_url("http://192.168.85.84:8080") == "http://192.168.85.84:8080"
+    assert _base_url("http://192.168.85.84:8080/") == "http://192.168.85.84:8080"
+
+
+def test_base_url_leaves_https_alone():
+    # Explicit TLS implies its own default port (443); don't force 8080 onto it.
+    assert _base_url("https://master.example") == "https://master.example"
 
 
 class FakeConfig:
