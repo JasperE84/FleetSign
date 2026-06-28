@@ -41,9 +41,11 @@ plus `python3-venv`.
    - `apt-get install -y mpv python3-venv xdotool wmctrl`
    - create a virtualenv at `~/fleetsign/.venv` and `pip install -e ~/fleetsign`
    - copy `systemd/fleetsign.service` to `~/.config/systemd/user/`
-   - add a start line to `~/.config/labwc/autostart` so the desktop session
-     launches it on every login/reboot (the Pi's `graphical-session.target` is not
-     reliably reached for `--user` units, so enabling the unit alone won't autostart)
+   - on labwc (Raspberry Pi OS's default compositor) add a start line to
+     `~/.config/labwc/autostart` so the desktop session launches it on every
+     login/reboot (the Pi's `graphical-session.target` is not reliably reached for
+     `--user` units, so enabling the unit alone won't autostart); on other desktops
+     it skips this step and prints a note instead
    - start the service for the current session
    - print the URL to open
 
@@ -240,6 +242,13 @@ rm -rf ~/fleetsign           # removes media, playlist/state, and config; back u
 - **Can't reach `http://<pi-ip>:8080`.** Read the address shown in the screen's
   bottom-right corner, or confirm the Pi's IP (`hostname -I`); check the service is
   running and that nothing firewalls port 8080 on the LAN.
+- **Forgot the admin password (locked out of the web UI).** The change-password
+  control needs you logged in, so reset it on the device. Stop the service
+  (`systemctl --user stop fleetsign`), edit `data/config.json` and set
+  `"password_hash": null` (the only field to touch), then start it again
+  (`systemctl --user start fleetsign`). The next browser visit returns to the setup
+  page to choose a new password. A slave needs no reset: it re-receives the master's
+  password on the next sync, so fix the password on the master.
 - **Large upload fails.** The server accepts up to 4 GiB with a 600 s timeout; a
   failure that large usually means the Pi's SD card is full (`df -h`).
 - **A slave isn't mirroring (multi-screen).** Open the slave's own page (read its

@@ -13,7 +13,7 @@ Runs as a **master/slave fleet**: the master hosts the full web UI for managing 
 Run from the repo root. No Pi or mpv is needed for tests — mpv interaction is dependency-injected.
 
 ```bash
-python -m pytest                       # full suite (≈159 tests)
+python -m pytest                       # full suite (≈208 tests)
 python -m pytest tests/test_store.py -v # one file
 python -m pytest tests/test_player.py::test_select_next_cycles_active_only -v  # one test
 python -m fleetsign --root . --port 8080  # run the daemon locally (needs mpv on PATH)
@@ -56,27 +56,23 @@ Flows: upload = `web.upload` → `store.add_media` → (next loop) `player._play
 
 ## Conventions and constraints to preserve
 
-Deliberate decisions — keep them when editing:
+Deliberate decisions — keep them when editing. Each links to its rationale in [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md); read that entry before changing the behavior, because most guard against a specific bug that isn't visible in the code.
 
-- **Web-only control.** Never add an operator console script; `install.sh` is the only console step (one-time deploy).
-- **mpv via properties, not positional `loadfile` options.** `_play_item` sets `mute`/`image-display-duration` with `set_property` *before* a plain `loadfile … replace`: mpv ≥ 0.38 changed `loadfile`'s arg order, so positional per-file options are silently dropped. Don't revert it.
-- **Player thread must never crash on bad data.** `is_active` treats unparseable schedules as inactive; `_run` backs off on every failure path. Web routes validate input (durations, `HH:MM`, weekday ints) and flash+redirect, never 500 — follow that for new input.
-- **Maintenance state is in-memory only** (`_maintenance`), reset on every mpv (re)launch so a reboot returns to fullscreen. Don't persist it.
-- **Exiting maintenance relaunches mpv; never re-fullscreen the live one.** Entering un-fullscreens + pauses the running mpv (cheap); exiting (web "Resume" or F12) signals a relaunch (`restart_playback`), not `set_property fullscreen True`. Re-fullscreening recreates mpv's video-output window and the immediate `loadfile` lands mid-recreation — a race that hangs mpv on the Pi compositor (dead IPC → `BrokenPipeError`, black screen; mpv #3678/#9704). A fresh mpv sequences window-create → decode like boot. Same reason `_teardown_mpv` SIGKILLs an mpv that ignores SIGTERM (no stale black window behind the relaunch).
-- **Atomic writes** for `manifest.json` and `config.json` (temp + `os.replace`); never in place.
-- **`tempfile.tempdir`** is set to the data dir in `main()` *only* (not `build()`), so large uploads spill to the SD card not tmpfs `/tmp`, and `build()` tests don't mutate global temp state.
-- **Logging is configured in `main()` only** (`logsetup.configure_logging`), never `build()` — same reason as `tempfile.tempdir` (keep `caplog` clean). Log via `logging.getLogger(__name__)` to stderr → journald; under systemd a `<N>` priority prefix is added so `journalctl -p` works (no `python-systemd` dep). Default INFO, override with `FLEETSIGN_LOG_LEVEL`. Keep hot loops quiet (per-item playback + no-op syncs at DEBUG; repeated failures latch to once-per-transition). Never log secrets (passwords, hashes, tokens, session secret).
-- **Portability:** `hwdec` is the web Settings value (default `auto-copy`; plain `auto` blue-screens video on the Pi compositor). Changing it relaunches mpv. No per-model config.
-- **Always-on-top via XWayland + focus guard, on purpose.** A native Wayland client can't pin itself on top (no protocol; `--ontop` no-ops), so `default_launcher` sets `WAYLAND_DISPLAY` to a dead socket (`fleetsign-no-wayland`) to force XWayland — don't merely unset it (libwayland falls back to `wayland-0`). mpv runs `--ontop` with a stable title; every 10 s `ForegroundGuard` reasserts it via `wmctrl` + `xdotool` (disabled in blank/maintenance). `install.sh` injects an `allowAlwaysOnTop` labwc rule (harmless on 0.8.4).
-- **The sync channel is untrusted; validate at the boundary.** A slave treats the manifest as hostile (token-auth, no TLS): `sync_once` validates every field, requires safe-basename filenames (`_is_safe_media_name`), and **rejects the whole manifest rather than skipping a bad item** (a skipped item becomes a fileless entry that also shields a stale local copy from pruning). Media is size-checked; truncated downloads are dropped, never shown.
-- **`hwdec` is per-Pi, never synced** (`manifest_payload` omits it; `replace_from_master` preserves it). The synced UI password hash (human login) is distinct from `sync_token` (authenticates the pull).
-- **Joining a slave needs only `master_url` + `sync_token`, never a login password.** The `/setup` join branch ignores the password (and `setup.html` hides it in join mode) — the slave gets its password from the master on first sync (`is_configured()` False until then → waiting page). The waiting/status pages render `sync.last_error` via `friendly_sync_error` with the raw detail underneath; that raw string is master-influenced, so keep it HTML-escaped (Jinja autoescape — never `|safe`). `last_attempt` (every attempt, vs `last_sync` = last success) timestamps the never-synced waiting page.
-- **Role lives only in `config.json`** (`master_url`/`sync_token`); one codebase, one entry point. Don't fork master/slave into separate packages or persist role elsewhere.
-- **The manifest JSON is the master↔slave compatibility contract; keep schema changes additive.** There is no version negotiation and **no version gate** — `__version__` is advertised in `manifest_payload` and echoed by slaves via the `X-Sync-Version` header purely so skew is *visible* (slave status banner via `version_mismatch`; master screens panel). A master upgrade never updates its slaves (deploy is out-of-band git/`install.sh`, never code-over-sync — the channel is untrusted), so mixed versions are normal and **must not** break. When you change the manifest shape, take this into account:
-  - **Additive only.** Add new fields; never remove/rename/repurpose one a deployed peer relies on. Slaves read every field through `.get()` + defaults (`MediaItem.from_dict`/`Settings.from_dict`, `payload.get(...)`), so an old slave ignores unknown keys and a new slave defaults missing ones. Additive changes let any master/slave version mix run with zero downtime, updated in any order.
-  - **A non-additive change is a fail-safe freeze, not a crash.** A slave rejects the *whole* manifest on any unexpected/invalid field (it treats the channel as hostile), keeps showing its last-good content, and surfaces the sync error on-screen — until it's upgraded. Don't rely on this; prefer additive + a transition window.
-  - **Validate a new field in both places, identically.** It's user input in the web route (flash+redirect on bad data) *and* hostile input at the sync boundary (`sync_once`, which rejects the whole manifest — never skips an item). Mirror the validation, like `_is_valid_schedule` mirrors the route's schedule check.
-  - **Bump `__version__`** (`fleetsign/__init__.py`) for any change operators should see reflected across the fleet, so the skew indicators are meaningful.
+- **Web-only control.** Never add an operator console script; `install.sh` is the only console step (one-time deploy). ([DD-1](docs/DESIGN_DECISIONS.md#dd-1))
+- **mpv via properties, not positional `loadfile` options.** Set `mute`/`image-display-duration` with `set_property` *before* a plain `loadfile … replace`; positional per-file options are silently dropped on mpv ≥ 0.38. Don't revert it. ([DD-2](docs/DESIGN_DECISIONS.md#dd-2))
+- **Player thread must never crash on bad data.** `is_active` treats unparseable schedules as inactive; `_run` backs off on every failure path. Web routes validate input (durations, `HH:MM`, weekday ints) and flash+redirect, never 500 — follow that for new input. ([DD-3](docs/DESIGN_DECISIONS.md#dd-3))
+- **Maintenance state is in-memory only** (`_maintenance`), reset on every mpv (re)launch so a reboot returns to fullscreen. Don't persist it. ([DD-4](docs/DESIGN_DECISIONS.md#dd-4))
+- **Exiting maintenance relaunches mpv; never re-fullscreen the live one.** Exiting (web "Resume" or F12) signals a relaunch (`restart_playback`), not `set_property fullscreen True` — re-fullscreening races mpv's video-output recreation and hangs it on the Pi compositor (dead IPC, black screen; mpv #3678/#9704). Same reason `_teardown_mpv` SIGKILLs an mpv that ignores SIGTERM. ([DD-5](docs/DESIGN_DECISIONS.md#dd-5))
+- **Atomic writes** for `manifest.json` and `config.json` (temp + `os.replace`); never in place. ([DD-8](docs/DESIGN_DECISIONS.md#dd-8))
+- **`tempfile.tempdir`** is set to the data dir in `main()` *only* (not `build()`), so large uploads spill to the SD card not tmpfs `/tmp`, and `build()` tests don't mutate global temp state. ([DD-9](docs/DESIGN_DECISIONS.md#dd-9))
+- **Logging is configured in `main()` only** (`logsetup.configure_logging`), never `build()`. Log via `logging.getLogger(__name__)` to stderr → journald; keep hot loops quiet (DEBUG + latch repeated failures); never log secrets (passwords, hashes, tokens, session secret). ([DD-10](docs/DESIGN_DECISIONS.md#dd-10))
+- **Portability:** `hwdec` is the web Settings value (default `auto-copy`; plain `auto` blue-screens video on the Pi compositor). Changing it relaunches mpv. No per-model config. ([DD-6](docs/DESIGN_DECISIONS.md#dd-6))
+- **Always-on-top via XWayland + focus guard, on purpose.** `default_launcher` forces XWayland via a dead `WAYLAND_DISPLAY` socket (`fleetsign-no-wayland`) — don't merely unset it (libwayland falls back to `wayland-0`). mpv runs `--ontop` with a stable title; `ForegroundGuard` reasserts it every 10 s via `wmctrl` + `xdotool` (disabled in blank/maintenance). ([DD-7](docs/DESIGN_DECISIONS.md#dd-7))
+- **The sync channel is untrusted; validate at the boundary.** A slave treats the manifest as hostile (token-auth, no TLS): `sync_once` validates every field, requires safe-basename filenames (`_is_safe_media_name`), and **rejects the whole manifest rather than skipping a bad item**. Media is size-checked; truncated downloads are dropped. ([DD-12](docs/DESIGN_DECISIONS.md#dd-12))
+- **`hwdec` is per-Pi, never synced** (`manifest_payload` omits it; `replace_from_master` preserves it). The synced UI password hash (human login) is distinct from `sync_token` (authenticates the pull). ([DD-13](docs/DESIGN_DECISIONS.md#dd-13))
+- **Joining a slave needs only `master_url` + `sync_token`, never a login password** (it arrives from the master on first sync; `is_configured()` False until then → waiting page). Keep the master-influenced `sync.last_error` HTML-escaped (Jinja autoescape — never `|safe`). ([DD-14](docs/DESIGN_DECISIONS.md#dd-14))
+- **Role lives only in `config.json`** (`master_url`/`sync_token`); one codebase, one entry point. Don't fork master/slave into separate packages or persist role elsewhere. ([DD-11](docs/DESIGN_DECISIONS.md#dd-11))
+- **The manifest JSON is the master↔slave compatibility contract; keep schema changes additive.** No version gate — `__version__`/`X-Sync-Version` only make skew *visible*; mixed versions are normal and **must not** break. New fields: additive only (read via `.get()` + defaults), validated identically in the web route *and* at the sync boundary (`sync_once`), and bump `__version__`. ([DD-15](docs/DESIGN_DECISIONS.md#dd-15))
 
 ## Testing
 
@@ -84,5 +80,6 @@ mpv and sockets are injected so tests run anywhere (Windows/CI): `PlayerControll
 
 ## Reference docs
 
+- `docs/DESIGN_DECISIONS.md` — the *why* behind the conventions above: rationale, failure modes, and mpv ticket references (DD-1 … DD-15).
 - `README.md` — overview + quick install (single Pi and fleet).
 - `INSTALL.md` — full deployment/ops guide (prerequisites, service management, master/slave setup, verification checklist, troubleshooting).

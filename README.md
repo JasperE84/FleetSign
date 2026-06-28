@@ -4,7 +4,7 @@
 
 ![Platform: Linux](https://img.shields.io/badge/platform-Raspberry%20Pi%20%7C%20Debian%20%7C%20Ubuntu-c51a4a)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Tests: 159 passing](https://img.shields.io/badge/tests-159%20passing-success)
+![Tests: 208 passing](https://img.shields.io/badge/tests-208%20passing-success)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)
 
 FleetSign turns a small Linux box (a Raspberry Pi, or any Debian/Ubuntu
@@ -164,7 +164,7 @@ it runs on any modern Linux desktop:
 - Network access on the LAN. A device with no real-time clock (like a Pi) relies
   on the network to set its time at boot; schedules depend on a correct clock.
 
-Runtime Python dependencies are just `flask` and `waitress`. The bundled
+Runtime Python dependencies are `flask`, `werkzeug`, and `waitress`. The bundled
 installer pulls in the system packages and builds the virtualenv for you on
 Debian-family systems (see [Quick start](#quick-start)).
 
@@ -193,9 +193,10 @@ the same network:
 
 Plain Debian or Ubuntu also use `apt`, so the installer's package, venv, and
 service steps run fine and it starts the service for the current session. But
-their default desktop is GNOME, not labwc, so the autostart line it writes to
-`~/.config/labwc/autostart` is never read and playback won't return on reboot.
-Add an autostart hook for your actual desktop instead; see
+their default desktop is GNOME, not labwc, so the installer skips the labwc
+autostart hook (it writes `~/.config/labwc/autostart` only when labwc is present)
+and playback won't return on reboot. Add an autostart hook for your actual
+desktop instead; see
 [Managing the service](#managing-the-service).
 
 Non-`apt` distros (Fedora, Arch, …) skip the installer entirely: install
@@ -308,7 +309,7 @@ interactions are dependency-injected, so the suite runs on any platform
 (including Windows/CI).
 
 ```bash
-python -m pytest                         # full suite (~159 tests)
+python -m pytest                         # full suite (~208 tests)
 python -m pytest tests/test_store.py -v   # one file
 python -m fleetsign --root . --port 8080    # run the daemon locally (needs mpv for real playback)
 ```

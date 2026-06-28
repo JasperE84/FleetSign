@@ -398,7 +398,7 @@ Short answers to everyday questions.
 - **"Wrong password" on login.** The interface uses one shared admin password. If
   you changed it recently on the master, screens pick up the change on their next
   sync, so allow a couple of minutes. There is no self-service reset; recovery is
-  done at the device (see [INSTALL.md](../INSTALL.md)).
+  done at the device (see [INSTALL.md](../INSTALL.md#troubleshooting)).
 - **A clock warning in the top bar.** The device's time looks unset. Schedules
   will be wrong until it corrects. Make sure the device can reach the network at
   boot so it can set its clock.
