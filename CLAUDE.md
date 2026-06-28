@@ -21,6 +21,19 @@ python -m fleetsign --root . --port 8080  # run the daemon locally (needs mpv on
 
 No separate lint/build step; `pyproject.toml` configures pytest (`pythonpath=["."]`, `testpaths=["tests"]`). Runtime deps: `flask` + `waitress`; system deps: `mpv`, `xdotool`, `wmctrl`. Deploy via `install.sh` + `systemd/fleetsign.service` (a `systemd --user` unit) — see `INSTALL.md`.
 
+## Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org): `type(scope): summary`.
+
+- **Type** — one of `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `build`, `chore`, `ci`, `revert`.
+- **Scope** (optional but preferred) — the area touched, named after the module: `sync`, `player`, `web`, `store`, `mpv`, `config`, `install`. E.g. `feat(sync): …`.
+- **Summary** — imperative mood, lower-case, no trailing period, ≤ ~72 chars ("add X", not "added"/"adds X").
+- **Body** (optional, after a blank line) — wrap ~72 cols; explain *why*, not the *what* the diff already shows. Reference issues / upstream mpv tickets where relevant.
+- **Breaking change** — add `!` after type/scope (`feat(store)!: …`) and/or a `BREAKING CHANGE:` footer. The manifest is kept additive on purpose (see *Conventions* below), so a true break should be rare.
+- **No tooling trailers** — omit `Co-Authored-By` / agent-session lines.
+
+Examples (from this repo): `feat(sync): centralize sync authorization for endpoints` · `fix(player): avoid re-fullscreening live mpv on maintenance exit` · `docs: clarify master/slave version-skew behavior`.
+
 ## Architecture
 
 One process (`python -m fleetsign`, run by systemd `--user`, `Restart=always`) hosts cooperating parts sharing an in-process `PlaylistStore`. `__main__.py` picks the app by role: master → `web.create_app`; slave → `web.create_slave_app` + a `SyncClient` thread.
