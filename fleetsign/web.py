@@ -177,6 +177,12 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
             f.save(dest)
             store.add_media(dest.name)
             logger.info("uploaded %s (%d bytes)", dest.name, dest.stat().st_size)
+        # The XHR uploader (templates/index.html) reloads the page itself, so
+        # return 204 and leave any flashed skip-warnings in the session for that
+        # reload to render. Following the redirect here would render index.html
+        # and consume them before the browser ever sees them.
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return ("", 204)
         return redirect(url_for("index"))
 
     @app.route("/media/<item_id>/enable", methods=["POST"])

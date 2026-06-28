@@ -102,6 +102,20 @@ label { display: inline-flex; align-items: center; gap: 6px; }
 .nowrap { white-space: nowrap; }
 .upload { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
+/* ---- upload progress ---- */
+.progress { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.progress-track {
+  flex: 1; min-width: 160px; height: 8px; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+}
+.progress-bar {
+  width: 0; height: 100%; background: var(--accent);
+  border-radius: 999px; transition: width .15s ease;
+}
+.progress-label { white-space: nowrap; }
+.progress.error .progress-bar { background: var(--danger); }
+.progress.error .progress-label { color: var(--danger); }
+
 /* ---- table ---- */
 .table-wrap {
   overflow-x: auto; background: var(--surface);

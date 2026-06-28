@@ -28,6 +28,20 @@ def test_upload_accepts_image_rejects_other(ctx):
     names = [m.filename for m in store.list_media()]
     assert "pic.png" in names and not any(n.endswith(".txt") for n in names)
 
+def test_upload_plain_post_redirects(ctx):
+    c, _ = ctx
+    r = c.post("/upload", data={"files": (io.BytesIO(b"x"), "pic.png")},
+               content_type="multipart/form-data", follow_redirects=False)
+    assert r.status_code == 302
+
+def test_upload_xhr_returns_204_and_adds_media(ctx):
+    c, store = ctx
+    r = c.post("/upload", data={"files": (io.BytesIO(b"x"), "pic.png")},
+               content_type="multipart/form-data",
+               headers={"X-Requested-With": "XMLHttpRequest"})
+    assert r.status_code == 204
+    assert "pic.png" in [m.filename for m in store.list_media()]
+
 def test_enable_duration_schedule_delete(ctx):
     c, store = ctx
     c.post("/upload", data={"files": (io.BytesIO(b"x"), "a.png")},

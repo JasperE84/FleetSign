@@ -22,11 +22,15 @@
 
     <section class="card">
       <h2>Add media</h2>
-      <form class="upload" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+      <form id="uploadform" class="upload" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
         <input type="file" name="files" multiple>
         <button type="submit">Upload</button>
         <span class="hint">Images and videos — large videos are fine.</span>
       </form>
+      <div id="uploadprogress" class="progress" style="display:none">
+        <div class="progress-track"><div class="progress-bar"></div></div>
+        <span class="progress-label hint"></span>
+      </div>
     </section>
 
     <div class="table-wrap">
@@ -165,5 +169,60 @@
   }
   refreshStatus();
   setInterval(refreshStatus, 3000);
+
+  // Upgrade the upload form to a background XHR with a progress bar, so a large
+  // video gives feedback instead of a frozen-looking page that invites re-clicks.
+  // Plain form POST still works if this script doesn't run.
+  (function () {
+    var form = document.getElementById("uploadform");
+    if (!form || !window.XMLHttpRequest) return;
+    var input = form.querySelector("input[type=file]");
+    var button = form.querySelector("button[type=submit]");
+    var box = document.getElementById("uploadprogress");
+    var bar = box.querySelector(".progress-bar");
+    var label = box.querySelector(".progress-label");
+    var buttonText = button.textContent;
+
+    form.addEventListener("submit", function (e) {
+      if (!input.files || input.files.length === 0) return;  // nothing picked
+      e.preventDefault();
+
+      var name = input.files.length === 1 ? input.files[0].name : input.files.length + " files";
+      button.disabled = true;
+      button.textContent = "Uploading…";
+      box.classList.remove("error");
+      box.style.display = "flex";
+      bar.style.width = "0%";
+      label.textContent = name;
+
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", form.action);
+      xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      xhr.upload.addEventListener("progress", function (ev) {
+        if (!ev.lengthComputable) return;
+        var pct = Math.round(ev.loaded / ev.total * 100);
+        bar.style.width = pct + "%";
+        // 100% sent but the Pi is still writing the file to the SD card.
+        label.textContent = pct >= 100 ? "Processing…" : name + " — " + pct + "%";
+      });
+      xhr.addEventListener("load", function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          window.location.assign("{{ url_for('index') }}");
+        } else {
+          fail("Upload failed (" + xhr.status + "). Please try again.");
+        }
+      });
+      xhr.addEventListener("error", function () { fail("Upload failed: network error. Please try again."); });
+      xhr.addEventListener("abort", function () { fail("Upload cancelled."); });
+      xhr.send(new FormData(form));
+    });
+
+    function fail(msg) {
+      box.classList.add("error");
+      label.textContent = msg;
+      button.disabled = false;
+      button.textContent = buttonText;
+    }
+  })();
   </script>
 </body></html>
