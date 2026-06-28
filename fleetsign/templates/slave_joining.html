@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FleetSign — Joining</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head><body class="auth">
+  <div class="card">
+    <h1><span class="dot"></span> FleetSign — Screen</h1>
+    <p>Joining <strong>{{ master_url }}</strong> — this device is restarting as a
+      screen.</p>
+    <p class="hint" id="status">Waiting for it to come back up…
+      <a href="/">the screen page</a> will open automatically.</p>
+  </div>
+
+  <script>
+  (function () {
+    var TARGET = "/";
+    function attempt() {
+      // Retry until the device is back as a screen, then land on its status page.
+      fetch(TARGET, {cache: "no-store"}).then(function (r) {
+        if (r.ok) { window.location.replace(TARGET); }
+        else { setTimeout(attempt, 1500); }
+      }).catch(function () { setTimeout(attempt, 1500); });
+    }
+    // The device SIGTERMs ~0.5 s after this response and systemd relaunches it in
+    // the screen role; wait a few seconds first so we poll the NEW process, not
+    // the old master answering mid-shutdown.
+    setTimeout(attempt, 3000);
+  })();
+  </script>
+  <noscript><meta http-equiv="refresh" content="6; url=/"></noscript>
+</body></html>

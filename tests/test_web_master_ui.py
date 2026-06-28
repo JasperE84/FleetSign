@@ -74,6 +74,12 @@ def test_setup_join_makes_slave_and_restarts(tmp_path):
     assert config.master_url == "192.168.1.50:8080"
     assert config.sync_token == "tok"
     assert called == [1]
+    # The response is an interstitial that sends the browser to the screen page
+    # ("/") once the device has restarted, rather than a plain text dead-end.
+    body = r.get_data(as_text=True)
+    assert "text/html" in r.headers["Content-Type"]
+    assert 'href="/"' in body
+    assert "screen" in body.lower()
 
 
 def test_setup_master_path_still_sets_password(tmp_path):
@@ -91,6 +97,8 @@ def test_join_master_route_restarts(tmp_path):
     r = c.post("/join-master", data={"master_url": "10.0.0.5:8080",
                                      "sync_token": "tok"})
     assert config.is_slave() is True and called == [1]
+    body = r.get_data(as_text=True)
+    assert 'href="/"' in body and "screen" in body.lower()
 
 
 def test_fresh_slave_login_does_not_loop(tmp_path):

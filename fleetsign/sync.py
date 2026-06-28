@@ -214,6 +214,9 @@ class SyncClient:
         # advertises none). The slave UI compares it to its own __version__.
         self.master_version: Optional[str] = None
         self._stop = threading.Event()
+        # Pulsed to cut the inter-sync sleep short for an immediate resync (e.g.
+        # when the operator re-points this screen at a new master from its UI).
+        self._wake = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def sync_once(self) -> SyncResult:
@@ -370,6 +373,21 @@ class SyncClient:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()  # break any in-progress sleep so the thread exits promptly
+
+    def request_sync(self) -> None:
+        """Cut short the current inter-sync sleep so the loop re-syncs now instead
+        of waiting out the ~2-min cycle. Used after the screen is re-pointed at a
+        new master from its own UI. Safe before start()/after stop() — it only
+        pulses an Event the loop reads; the next loop iteration runs sync_once."""
+        self._wake.set()
+
+    def _sleep(self, delay: float) -> None:
+        # The loop's only sleep point: wait up to `delay`, but return early when
+        # stop() or request_sync() pulses _wake. One seam so the wake path and the
+        # tests share a single place to intercept.
+        self._wake.wait(delay)
+        self._wake.clear()
 
     def _log_result(self, res: "SyncResult") -> None:
         if res.changed or res.downloaded or res.pruned:
@@ -416,7 +434,7 @@ class SyncClient:
                 failing = True
                 last_logged_error = str(e)
                 delay = 15.0
-            self._stop.wait(delay)
+            self._sleep(delay)
 
 
 class FleetTracker:

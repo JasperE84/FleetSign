@@ -116,7 +116,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
                 else:
                     config.join_master(url, tok)
                     restarter()
-                    return "Joining master — the device will restart as a screen.", 200
+                    return render_template("slave_joining.html", master_url=url)
             else:
                 pw = request.form.get("password", "")
                 if len(pw) < 4:
@@ -329,7 +329,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
             return redirect(url_for("index"))
         config.join_master(url, tok)
         restarter()
-        return "Joining master — the device will restart as a screen.", 200
+        return render_template("slave_joining.html", master_url=url)
 
     return app
 
@@ -433,7 +433,8 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
         tok = request.form.get("sync_token", "").strip()
         if url and tok:
             config.join_master(url, tok)  # still a slave; SyncClient re-reads
-            flash("Master connection updated — applies on the next sync.")
+            sync_client.request_sync()    # don't wait out the ~2-min cycle; sync now
+            flash("Master connection updated — syncing now…")
         else:
             flash("Master address and token are required.")
         return redirect(url_for("index"))

@@ -118,6 +118,25 @@ def test_slave_preconfig_repoint_works(tmp_path):
     assert called == []     # re-point takes effect next sync; no restart
 
 
+def test_slave_repoint_triggers_immediate_sync(tmp_path):
+    # Re-pointing must not wait out the ~2-min cycle: the route wakes the sync
+    # loop so the new master is contacted right away.
+    c, store, config, ctrl, called = _build_slave(tmp_path, with_password=False)
+    sync = c.application.sync_client
+    assert not sync._wake.is_set()
+    c.post("/local/connection", data={"master_url": "10.0.0.9:8080",
+                                       "sync_token": "t2"})
+    assert sync._wake.is_set()             # loop asked to sync now
+
+
+def test_slave_waiting_page_auto_refreshes(tmp_path):
+    # The waiting page must advance on its own once the first sync lands, so an
+    # operator who joined/re-pointed isn't left staring at a stale page.
+    c, store, config, ctrl, called = _build_slave(tmp_path, with_password=False)
+    body = c.get("/").get_data(as_text=True)
+    assert "location.reload" in body          # client-side auto-refresh present
+
+
 def test_slave_index_shows_master(slave):
     c, *_ = slave
     body = c.get("/").get_data(as_text=True)

@@ -94,6 +94,29 @@ def test_set_maintenance_resume_when_off_does_not_relaunch(tmp_path):
     ctrl.set_maintenance(False)            # already off (default state)
     assert ctrl._restart.is_set() is False
 
+def test_worker_sends_safe_when_ipc_absent_or_raising(tmp_path):
+    # Worker-thread controls (blank/maintenance) route their mpv sends through
+    # _try_command, which must never raise: not when mpv isn't up yet (_ipc None),
+    # and not when the socket is dead. Lifecycle stays the player thread's job.
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+
+    ctrl._ipc = None
+    ctrl.set_blank(True)         # no AttributeError on None
+    ctrl.set_maintenance(True)
+
+    class BoomIpc:
+        def command(self, *a, timeout=5.0):
+            raise ConnectionError("mpv socket write failed")
+        def close(self):
+            pass
+
+    ctrl._ipc = BoomIpc()
+    ctrl._maintenance = False    # allow a fresh enter transition
+    ctrl.set_blank(True)         # IPC error swallowed, not propagated
+    ctrl.set_maintenance(True)
+
+
 def test_pump_event_tracks_fullscreen(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
     ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))

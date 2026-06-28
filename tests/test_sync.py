@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import urllib.request
 from fleetsign import __version__
 from fleetsign.store import PlaylistStore
@@ -318,7 +319,7 @@ def test_run_uses_short_backoff_on_failure(tmp_path):
     store, media = make_store(tmp_path)
     client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
     waits = []
-    client._stop.wait = lambda d: (waits.append(d), client._stop.set())[1] and None
+    client._sleep = lambda d: (waits.append(d), client._stop.set())[1] and None
 
     def fake_once():
         return SyncResult(ok=False, error="x")
@@ -572,7 +573,7 @@ def test_run_survives_sync_once_raising(tmp_path):
     store, media = make_store(tmp_path)
     client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
     waits = []
-    client._stop.wait = lambda d: (waits.append(d), client._stop.set())[1] and None
+    client._sleep = lambda d: (waits.append(d), client._stop.set())[1] and None
 
     def boom():
         raise RuntimeError("kaboom")
@@ -590,7 +591,7 @@ def test_run_survives_rng_raising(tmp_path):
     store, media = make_store(tmp_path)
     client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
     waits = []
-    client._stop.wait = lambda d: (waits.append(d), client._stop.set())[1] and None
+    client._sleep = lambda d: (waits.append(d), client._stop.set())[1] and None
     client.sync_once = lambda: SyncResult(ok=True)   # success path
 
     def boom(a, b):
@@ -599,6 +600,34 @@ def test_run_survives_rng_raising(tmp_path):
     client._run()                          # must not propagate
 
     assert waits == [15.0]
+
+
+def test_request_sync_wakes_the_loop_for_immediate_resync(tmp_path):
+    # Re-pointing a running screen shouldn't wait out the ~2-min inter-sync sleep:
+    # request_sync() must cut the sleep short so the loop re-syncs right away.
+    store, media = make_store(tmp_path)
+    client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
+    client._rng = lambda a, b: 1000.0      # a success sleep long enough to never re-fire on its own
+    ticks = []
+    gate = threading.Event()
+
+    def counting_once():
+        ticks.append(1)
+        gate.set()
+        return SyncResult(ok=True)
+
+    client.sync_once = counting_once       # type: ignore[assignment]
+    client.start()
+    try:
+        assert gate.wait(2.0)              # first sync runs on startup
+        gate.clear()
+        n = len(ticks)
+        client.request_sync()             # ask for an immediate resync
+        assert gate.wait(2.0)             # ... and it happens without the 1000 s wait
+        assert len(ticks) > n
+    finally:
+        client.stop()
+        client._thread.join(2.0)
 
 
 def test_bad_schedule_fails_whole_manifest(tmp_path):
@@ -738,7 +767,7 @@ def test_run_warns_once_on_repeated_failure_then_logs_recovery(tmp_path, caplog)
     store, media = make_store(tmp_path)
     client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
     client._rng = lambda a, b: 0.0
-    client._stop.wait = lambda d: None     # don't actually sleep the backoff
+    client._sleep = lambda d: None         # don't actually sleep the backoff
     results = [SyncResult(ok=False, error="boom"),
                SyncResult(ok=False, error="boom"),
                SyncResult(ok=True)]

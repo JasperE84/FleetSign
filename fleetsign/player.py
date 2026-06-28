@@ -205,6 +205,24 @@ class ForegroundGuard:
 
 
 class PlayerController:
+    """Supervises the single persistent mpv window from a dedicated player thread.
+
+    Threading contract (two tiers):
+
+    - *Lifecycle* — launching, tearing down, relaunching, or otherwise recreating
+      mpv's window — belongs to the player thread alone. Other threads request a
+      relaunch via ``restart_playback`` (which only sets an Event); they must never
+      tear mpv down directly. Re-creating the window and firing a ``loadfile`` into
+      the recreation hangs mpv on the Pi compositor (mpv #3678/#9704), and nulling
+      ``_ipc``/``_proc`` out from under the player thread leaves it busy-spinning
+      in ``_play_item``.
+    - *Property sends* — ``set_property``/``stop``/``osd-overlay`` — are idempotent
+      and pass through ``MpvIpc``, which serializes sends across threads. A Waitress
+      worker may issue these (blank, maintenance) via ``_try_command`` without
+      owning mpv; a send dropped by a concurrent relaunch is simply re-applied by
+      the player loop.
+    """
+
     def __init__(
         self,
         store: PlaylistStore,
@@ -261,11 +279,11 @@ class PlayerController:
         if blank != self._blank:
             logger.info("display %s", "blanked" if blank else "unblanked")
         self._blank = blank
-        if blank and self._ipc:
-            try:
-                self._ipc.command("stop")
-            except Exception:
-                pass
+        # Stop now for snappy feedback. A property send (not a lifecycle change),
+        # so it's safe from a worker thread via _try_command; if it's dropped (e.g.
+        # racing a relaunch) the player loop's blank branch re-issues the stop.
+        if blank:
+            self._try_command("stop")
 
     def set_maintenance(self, on: bool) -> None:
         was = self._maintenance
@@ -276,15 +294,12 @@ class PlayerController:
             # Enter: drop the live mpv out of fullscreen, clear always-on-top, and
             # pause it so the operator can both reach and see the desktop. Without
             # clearing ontop the windowed mpv would keep floating above everything.
-            # Cheap, idempotent (safe on a duplicate "Enter maintenance"), and keeps
-            # the same mpv up.
-            if self._ipc:
-                try:
-                    self._ipc.command("set_property", "fullscreen", False)
-                    self._ipc.command("set_property", "ontop", False)
-                    self._ipc.command("set_property", "pause", True)
-                except Exception:
-                    pass
+            # Cheap, idempotent (safe on a duplicate "Enter maintenance"), keeps the
+            # same mpv up, and a property send — so safe from a worker thread via
+            # _try_command (see the class docstring's threading contract).
+            self._try_command("set_property", "fullscreen", False)
+            self._try_command("set_property", "ontop", False)
+            self._try_command("set_property", "pause", True)
         elif was:
             logger.info("exiting maintenance; relaunching mpv")
             # Exit, but only on a real True->False transition. "Resume signage" is
@@ -310,6 +325,19 @@ class PlayerController:
         # signal the player thread, which owns mpv, to relaunch on its next loop
         # iteration.
         self._restart.set()
+
+    def _try_command(self, *args) -> None:
+        # Best-effort mpv send, safe to call from any thread (see the class
+        # docstring's threading contract). Snapshot _ipc once so a concurrent
+        # relaunch nulling it can't turn this into an AttributeError on None, and
+        # swallow IPC errors — the player loop re-applies anything important.
+        ipc = self._ipc
+        if ipc is None:
+            return
+        try:
+            ipc.command(*args)
+        except Exception:
+            pass
 
     def _teardown_mpv(self) -> None:
         if self._ipc:
@@ -380,16 +408,13 @@ class PlayerController:
         # Show http://<ip>:<port> small in the bottom-right so the web UI is
         # discoverable from the screen itself. Re-sent each loop iteration so it
         # survives an mpv relaunch and tracks a changed (DHCP) IP. Best-effort.
-        if not self._ipc:
-            return
-        try:
-            self._ipc.command(
-                "osd-overlay", OSD_OVERLAY_ID, "ass-events",
-                format_ip_overlay(local_ip(), self.web_port),
-                1920, 1080, 0, False, False,
-            )
-        except Exception:
-            pass
+        if self._ipc is None:
+            return  # skip the local_ip() probe when there's no mpv to draw on
+        self._try_command(
+            "osd-overlay", OSD_OVERLAY_ID, "ass-events",
+            format_ip_overlay(local_ip(), self.web_port),
+            1920, 1080, 0, False, False,
+        )
 
     def _pump_event(self, timeout: float) -> Optional[dict]:
         ev = self._ipc.get_event(timeout=timeout) if self._ipc else None
@@ -403,11 +428,8 @@ class PlayerController:
                     # desktop, and pause. (Exiting relaunches a fresh mpv, which
                     # comes back fullscreen + --ontop, so no live restore here.)
                     logger.info("maintenance mode entered (F12)")
-                    try:
-                        self._ipc.command("set_property", "ontop", False)
-                        self._ipc.command("set_property", "pause", maint)
-                    except Exception:
-                        pass
+                    self._try_command("set_property", "ontop", False)
+                    self._try_command("set_property", "pause", maint)
                 else:
                     # Exited (F12 back to fullscreen): relaunch fresh rather than
                     # reusing the just-recreated window — same loadfile-mid-recreation

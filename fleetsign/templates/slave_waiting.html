@@ -10,7 +10,8 @@
     {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
     <p class="hint">This screen is joining <strong>{{ master_url }}</strong>.</p>
     <p class="hint">Waiting for the first sync from the master, which delivers its
-      settings and the login password. This page unlocks once that sync completes.</p>
+      settings and the login password. This page refreshes itself and unlocks once
+      that sync completes.</p>
 
     {% if last_error %}
     <div class="warn-banner">
@@ -33,4 +34,17 @@
       </form>
     </details>
   </div>
+
+  <script>
+  // Poll for the first sync by reloading; once it lands this page is no longer
+  // served (the slave is configured) and the reload shows the status page. Skip
+  // the reload while the recovery form is open or an input has focus so a full
+  // refresh never wipes a master URL/token being typed into it.
+  setInterval(function () {
+    var d = document.querySelector("details");
+    var editing = (d && d.open) ||
+      (document.activeElement && document.activeElement.tagName === "INPUT");
+    if (!editing) { location.reload(); }
+  }, 5000);
+  </script>
 </body></html>
