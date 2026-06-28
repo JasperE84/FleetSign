@@ -1,6 +1,8 @@
 [project]
 name = "fleetsign"
-version = "0.1.0"
+# Single source of truth: read from fleetsign.__version__ (the value advertised
+# across the fleet for version-skew detection) so a release bumps it in one place.
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = ["flask>=3.0", "waitress>=3.0", "werkzeug>=3.0"]
 
@@ -13,6 +15,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["fleetsign"]
+
+[tool.setuptools.dynamic]
+version = {attr = "fleetsign.__version__"}
 
 [tool.setuptools.package-data]
 fleetsign = ["templates/*.html", "static/*.css"]

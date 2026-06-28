@@ -656,6 +656,16 @@ def test_friendly_sync_error_classifies_common_cases():
         "manifest: bad manifest shape").lower()
 
 
+def test_friendly_sync_error_size_mismatch_is_not_auth():
+    # A truncated download surfaces as "size 4030 != 5000". The digits happen to
+    # contain "403", which must NOT be mistaken for an HTTP 403 / bad token; it's
+    # a data-mismatch, classified via the "!=" branch.
+    msg = "download clip.mp4: size 4030 != 5000"
+    friendly = friendly_sync_error(msg).lower()
+    assert "token" not in friendly
+    assert "rejected" in friendly
+
+
 def test_last_attempt_recorded_on_success_and_failure(tmp_path):
     # last_sync is "last success"; last_attempt is "last time we tried at all",
     # so the waiting page (never synced) can still show when it last attempted.

@@ -6,6 +6,7 @@ import secrets
 import signal
 import threading
 import time
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
@@ -35,7 +36,6 @@ def _default_restarter() -> None:
 def _clock_status() -> dict:
     # The Pi-clock fields the status page polls, shared by master and slave so the
     # format and the clock_ok threshold can't drift between the two app factories.
-    from datetime import datetime
     now = datetime.now()
     return {
         "now": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -55,7 +55,6 @@ def _fmt_ts(epoch):
     # the template can fall back to 'never'.
     if not epoch:
         return None
-    from datetime import datetime
     try:
         return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
     except (OSError, OverflowError, ValueError):

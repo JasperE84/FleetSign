@@ -1,6 +1,7 @@
 import json
 import socket
 import threading
+import time
 import pytest
 from fleetsign.mpv_ipc import MpvIpc, encode_command, parse_lines
 
@@ -52,5 +53,21 @@ def test_timeout_does_not_leak_response():
     ipc = MpvIpc(a)
     with pytest.raises(TimeoutError):
         ipc.command("get_property", "fullscreen", timeout=0.3)
+    assert ipc._responses == {}
+    ipc.close()
+
+
+def test_late_response_after_timeout_is_dropped():
+    # A reply that arrives only AFTER its command gave up must be discarded, not
+    # stored forever — otherwise every timed-out command leaks one dict entry.
+    a, b = socket.socketpair()
+    ipc = MpvIpc(a)
+    with pytest.raises(TimeoutError):
+        ipc.command("get_property", "fullscreen", timeout=0.2)  # request_id 1
+    b.sendall((json.dumps({"error": "success", "data": True,
+                           "request_id": 1}) + "\n").encode())
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and ipc._responses:
+        time.sleep(0.01)
     assert ipc._responses == {}
     ipc.close()

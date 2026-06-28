@@ -75,7 +75,10 @@ def friendly_sync_error(raw: Optional[str]) -> Optional[str]:
     if "timed out" in low or "timeout" in low:
         return ("Timed out — the master isn't responding (check the address "
                 "and network).")
-    if "403" in low or "forbidden" in low:
+    if "forbidden" in low or "error 403" in low or "status 403" in low:
+        # Match the HTTP-403 forms ("HTTP Error 403: Forbidden") rather than a
+        # bare "403" substring, which false-matches a download size-mismatch
+        # ("size 4030 != 5000") and mislabels truncated data as a bad token.
         return "Authentication failed — the sync token is likely wrong."
     if ("name or service" in low or "getaddrinfo" in low
             or "name resolution" in low or "nodename" in low):
