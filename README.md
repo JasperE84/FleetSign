@@ -215,6 +215,12 @@ systemctl --user status fleetsign     # is it running? (fetch status)
 journalctl --user -u fleetsign -f     # live logs (errors, mpv relaunches)
 ```
 
+Logs go to the journal at **INFO** by default (startup, role, mpv relaunches,
+uploads, logins, sync results, warnings). Filter to problems with
+`journalctl --user -u fleetsign -p warning`. For verbose troubleshooting set
+`FLEETSIGN_LOG_LEVEL=debug` (via `systemctl --user edit fleetsign`, then restart)
+— see **Log verbosity** in [INSTALL.md](INSTALL.md).
+
 `systemd` supervises the process and restarts it if it dies (`Restart=always`),
 but it does **not** start it at boot — that's the autostart hook below.
 

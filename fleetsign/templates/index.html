@@ -128,9 +128,10 @@
 
       <section class="card">
         <h2>Screens &amp; sync</h2>
+        <p class="hint">This master is running <strong>v{{ app_version }}</strong>.</p>
         <p class="hint">Connected screens (polled in the last 5&nbsp;min):</p>
         <ul class="screens">
-          {% for ip in screens %}<li>{{ ip }}</li>{% else %}<li class="hint">None yet.</li>{% endfor %}
+          {% for s in screens %}<li>{{ s.ip }}{% if s.version %} — v{{ s.version }}{% if s.version != app_version %} <span class="pill off">differs from master</span>{% endif %}{% else %} — <span class="hint">version unknown</span>{% endif %}</li>{% else %}<li class="hint">None yet.</li>{% endfor %}
         </ul>
         <form class="row" method="post" action="{{ url_for('sync_token_update') }}"
               onsubmit="return confirm('Changing the token stops every connected screen from syncing until you re-enter the new token on each one. Continue?')">

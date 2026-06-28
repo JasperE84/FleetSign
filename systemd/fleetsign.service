@@ -10,3 +10,9 @@ WorkingDirectory=%h/fleetsign
 ExecStart=%h/fleetsign/.venv/bin/python -m fleetsign --root %h/fleetsign
 Restart=always
 RestartSec=3
+# Tag journal entries so `journalctl --user -t fleetsign` works alongside -u.
+SyslogIdentifier=fleetsign
+# Log verbosity is INFO by default. For verbose troubleshooting, uncomment the
+# next line (or run `systemctl --user edit fleetsign` to add it as an override),
+# then `systemctl --user restart fleetsign`. Levels: debug, info, warning, error.
+#Environment=FLEETSIGN_LOG_LEVEL=debug

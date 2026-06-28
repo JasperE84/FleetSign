@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import threading
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Optional
 
 from werkzeug.security import check_password_hash, generate_password_hash
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,7 +43,8 @@ class AppConfig:
         if config_path.exists():
             try:
                 d = json.loads(config_path.read_text("utf-8"))
-            except (ValueError, OSError):
+            except (ValueError, OSError) as e:
+                logger.warning("config.json unreadable (%s); using defaults", e)
                 d = {}
         cfg = cls(
             config_path=config_path,
@@ -84,16 +88,20 @@ class AppConfig:
             self.master_url = master_url
             self.sync_token = sync_token
             self._save_locked()
+        # Log the address but never the token, hash, or session secret.
+        logger.info("joined master %s (now running as a screen)", master_url)
 
     def become_master(self) -> None:
         with self._save_lock:
             self.master_url = ""
             self._save_locked()
+        logger.info("promoted to master")
 
     def set_sync_token(self, token: str) -> None:
         with self._save_lock:
             self.sync_token = token
             self._save_locked()
+        logger.info("sync token changed")
 
     def set_password_hash(self, password_hash: Optional[str]) -> None:
         # Store a pre-computed hash (e.g. one synced from the master) without

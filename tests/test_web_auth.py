@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from fleetsign.config import AppConfig
 from fleetsign.store import PlaylistStore
@@ -52,6 +54,18 @@ def test_upload_limit_allows_large_videos(client):
     # videos well over 250 MB must not be rejected with 413
     assert MAX_UPLOAD_BYTES >= 250 * 1024 * 1024
     assert c.application.config["MAX_CONTENT_LENGTH"] == MAX_UPLOAD_BYTES
+
+def test_login_logs_success_and_failure(client, caplog):
+    c, config = client
+    config.set_password("hunter2")
+    with caplog.at_level(logging.INFO, logger="fleetsign.web"):
+        c.post("/login", data={"password": "nope"})
+        c.post("/login", data={"password": "hunter2"})
+    assert any(r.levelno == logging.WARNING and "failed login" in r.getMessage()
+               for r in caplog.records)
+    assert any(r.levelno == logging.INFO and "login ok" in r.getMessage()
+               for r in caplog.records)
+
 
 def test_templates_and_static_are_packaged():
     # Guards that the package-data globs in pyproject keep shipping the templates

@@ -124,6 +124,48 @@ def test_slave_index_shows_master(slave):
     assert "192.168.1.50:8080" in body
 
 
+# A phrase that appears ONLY in the rendered mismatch banner -- not in the
+# always-present status-bar JS (which references s.version_mismatch literally).
+_MISMATCH_BANNER = "Update them to the same version"
+
+
+def test_slave_shows_version_mismatch_banner(slave):
+    # When the slave's code version differs from the master it last synced with,
+    # the status page warns so a forgotten upgrade is visible on the screen.
+    c, *_ = slave
+    c.application.sync_client.master_version = "999.0.0"
+    body = c.get("/").get_data(as_text=True)
+    assert "999.0.0" in body
+    assert _MISMATCH_BANNER in body
+
+
+def test_slave_no_mismatch_banner_when_versions_match(slave):
+    from fleetsign import __version__
+    c, *_ = slave
+    c.application.sync_client.master_version = __version__
+    body = c.get("/").get_data(as_text=True)
+    assert _MISMATCH_BANNER not in body
+
+
+def test_slave_no_mismatch_banner_before_first_sync(slave):
+    # master_version is None until a successful sync; absence of data must not be
+    # rendered as a mismatch.
+    c, *_ = slave
+    assert c.application.sync_client.master_version is None
+    body = c.get("/").get_data(as_text=True)
+    assert _MISMATCH_BANNER not in body
+
+
+def test_slave_status_json_includes_versions(slave):
+    from fleetsign import __version__
+    c, *_ = slave
+    c.application.sync_client.master_version = "999.0.0"
+    data = c.get("/status").get_json()
+    assert data["app_version"] == __version__
+    assert data["master_version"] == "999.0.0"
+    assert data["version_mismatch"] is True
+
+
 def test_slave_hwdec_change_restarts_playback(slave):
     c, store, _, ctrl, _ = slave
     c.post("/local/hwdec", data={"hwdec": "no"})

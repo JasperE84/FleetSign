@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 from .model import MediaItem, Schedule, Settings, classify, new_id
+
+logger = logging.getLogger(__name__)
 
 
 def safe_unlink(path: Path) -> bool:
@@ -37,7 +40,7 @@ class PlaylistStore:
             d = json.loads(self.manifest_path.read_text("utf-8"))
             self._settings = Settings.from_dict(d.get("settings", {}))
             self._media = [MediaItem.from_dict(m) for m in d.get("media", [])]
-        except (ValueError, KeyError, OSError, TypeError, AttributeError):
+        except (ValueError, KeyError, OSError, TypeError, AttributeError) as e:
             # TypeError/AttributeError too: a valid-JSON but mistyped manifest
             # (e.g. schedule a string, days a non-iterable) makes from_dict raise
             # those, not ValueError -- and an uncaught one here crashes __init__
@@ -47,7 +50,12 @@ class PlaylistStore:
             try:
                 os.replace(self.manifest_path, backup)
             except OSError:
-                pass
+                backup = None
+            logger.warning(
+                "manifest.json corrupt (%s); %s and reset to an empty playlist",
+                e,
+                f"backed up to {backup.name}" if backup else "backup failed",
+            )
             self._settings = Settings()
             self._media = []
             self._save()

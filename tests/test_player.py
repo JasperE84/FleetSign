@@ -415,3 +415,61 @@ def test_restart_playback_relaunches_via_run_loop(tmp_path):
     time.sleep(0.6)
     ctrl.stop()
     assert len(launches) >= 2, "restart_playback did not relaunch mpv"
+
+
+def test_ensure_mpv_warns_when_mpv_exited_unexpectedly(tmp_path, caplog):
+    # A surviving _proc whose poll() is non-None means mpv died on its own (the
+    # self-healing relaunch path). That must warn; a clean first launch is INFO.
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+
+    class DeadProc:
+        def poll(self): return 1   # already exited, returncode 1
+
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"),
+                           launcher=lambda *a: DeadProc(),
+                           connector=lambda *a: FakeIpc())
+    ctrl._proc = DeadProc()        # pretend mpv was running and has now crashed
+    with caplog.at_level(logging.INFO, logger="fleetsign.player"):
+        ctrl._ensure_mpv()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("exited unexpectedly" in r.getMessage() for r in warnings)
+
+
+def test_ensure_mpv_logs_info_on_clean_launch(tmp_path, caplog):
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+
+    class DummyProc:
+        def poll(self): return None
+
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"),
+                           launcher=lambda *a: DummyProc(),
+                           connector=lambda *a: FakeIpc())
+    with caplog.at_level(logging.INFO, logger="fleetsign.player"):
+        ctrl._ensure_mpv()   # _proc is None -> normal launch
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert any("launching mpv" in m and "auto-copy" in m for m in infos)
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_set_maintenance_logs_enter_once_and_exit(tmp_path, caplog):
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+    with caplog.at_level(logging.INFO, logger="fleetsign.player"):
+        ctrl.set_maintenance(True)
+        ctrl.set_maintenance(True)    # duplicate -> no second "entered"
+        ctrl.set_maintenance(False)
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert sum("maintenance mode entered" in m for m in msgs) == 1
+    assert any("exiting maintenance" in m for m in msgs)
+
+
+def test_set_blank_logs_on_transition_only(tmp_path, caplog):
+    store = PlaylistStore(tmp_path / "manifest.json", tmp_path)
+    ctrl = PlayerController(store, str(tmp_path / "mpv.sock"))
+    with caplog.at_level(logging.INFO, logger="fleetsign.player"):
+        ctrl.set_blank(True)
+        ctrl.set_blank(True)     # no change -> no log
+        ctrl.set_blank(False)
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert msgs.count("display blanked") == 1
+    assert msgs.count("display unblanked") == 1

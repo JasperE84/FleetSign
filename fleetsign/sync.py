@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import random
@@ -15,10 +16,13 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 DEFAULT_MASTER_PORT = 8080
 
+from . import __version__
 from .model import MediaItem, classify
 from .schedule import parse_hhmm
 from .store import PlaylistStore, safe_unlink
 from .validate import positive_seconds
+
+logger = logging.getLogger(__name__)
 
 
 def manifest_payload(store: PlaylistStore) -> dict:
@@ -38,6 +42,12 @@ def manifest_payload(store: PlaylistStore) -> dict:
         served.append(m)
     s = store.get_settings()
     return {
+        # The master advertises its own code version (informational, never a
+        # gate): a slave records it for its UI so a forgotten upgrade is visible.
+        # Schema changes stay backward-compatible -- an old slave ignores unknown
+        # keys, a new slave defaults missing ones -- so this is for humans, not
+        # for refusing to sync.
+        "version": __version__,
         "settings": {"default_image_duration": s.default_image_duration,
                      "muted": s.muted},
         "media": [m.to_dict() for m in served],
@@ -78,17 +88,31 @@ def friendly_sync_error(raw: Optional[str]) -> Optional[str]:
     return None
 
 
+def version_mismatch(master_version: Optional[str],
+                     local_version: str = __version__) -> bool:
+    """True only when the master's version is known AND differs from ours. An
+    unknown master version -- an older master that advertises none, or a slave
+    that has never completed a sync -- returns False so the UI never cries wolf
+    over data it simply doesn't have yet."""
+    return bool(master_version) and master_version != local_version
+
+
 @dataclass
 class SyncResult:
     ok: bool
     error: Optional[str] = None
     downloaded: int = 0
     pruned: int = 0
+    # True when the playlist/settings (not just files) were actually applied, so
+    # the loop can log a meaningful "synced" line even for a reorder/schedule
+    # change that downloads nothing.
+    changed: bool = False
 
 
 def urllib_fetch(url: str, token: str, dest: Optional[Path] = None,
                  timeout: float = 30.0) -> Optional[bytes]:
-    req = urllib.request.Request(url, headers={"X-Sync-Token": token})
+    req = urllib.request.Request(url, headers={"X-Sync-Token": token,
+                                               "X-Sync-Version": __version__})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if dest is None:
@@ -182,6 +206,10 @@ class SyncClient:
         self.last_sync: Optional[float] = None
         self.last_attempt: Optional[float] = None
         self.last_error: Optional[str] = None
+        # The master's code version, learned from the last accepted manifest;
+        # stays None until a successful sync (or against an old master that
+        # advertises none). The slave UI compares it to its own __version__.
+        self.master_version: Optional[str] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -310,6 +338,12 @@ class SyncClient:
         pw = payload.get("password_hash")
         if isinstance(pw, str) and pw != self.config.password_hash:
             self.config.set_password_hash(pw)
+            logger.info("UI login password updated from master")
+
+        # Record the master's advertised version for the slave's UI. Informational
+        # only: a non-string or absent value (old master) just leaves it unknown.
+        mv = payload.get("version")
+        self.master_version = mv if isinstance(mv, str) else None
 
         keep = {m.filename for m in media}
         pruned = 0
@@ -323,47 +357,94 @@ class SyncClient:
 
         self.last_sync = self._clock()
         self.last_error = None
-        return SyncResult(ok=True, downloaded=downloaded, pruned=pruned)
+        return SyncResult(ok=True, downloaded=downloaded, pruned=pruned,
+                          changed=not unchanged)
 
     def start(self) -> None:
+        logger.info("sync client started; master=%s", self.config.master_url)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
 
+    def _log_result(self, res: "SyncResult") -> None:
+        if res.changed or res.downloaded or res.pruned:
+            logger.info("synced from master: %d downloaded, %d pruned%s",
+                        res.downloaded, res.pruned,
+                        "" if (res.downloaded or res.pruned) else " (playlist/settings updated)")
+        else:
+            logger.debug("sync ok, no changes")
+
     def _run(self) -> None:
+        # Latch the failing state so a master that's down for hours logs the
+        # outage start (and recovery) once, not a WARNING every 15 s. Repeats of
+        # the same error drop to DEBUG; a changed error re-warns.
+        failing = False
+        last_logged_error: Optional[str] = None
         while not self._stop.is_set():
             try:
                 res = self.sync_once()
-                # Inside the try so the "never die" guarantee is structural, not a
-                # property of the injected callables: a raising _rng still recovers
-                # on the short backoff instead of killing the thread.
-                delay = self._rng(105.0, 135.0) if res.ok else 15.0
+                # _rng is inside the try so the "never die" guarantee is
+                # structural, not a property of the injected callables: a raising
+                # _rng still recovers on the short backoff instead of killing the
+                # thread.
+                if res.ok:
+                    if failing:
+                        failing = False
+                        last_logged_error = None
+                        logger.info("sync recovered")
+                    self._log_result(res)
+                    delay = self._rng(105.0, 135.0)
+                else:
+                    if not failing or res.error != last_logged_error:
+                        logger.warning("sync failed: %s (retrying in 15s)", res.error)
+                    else:
+                        logger.debug("sync still failing: %s", res.error)
+                    failing = True
+                    last_logged_error = res.error
+                    delay = 15.0
             except Exception as e:  # never let the loop die
                 self.last_error = str(e)
+                if not failing or str(e) != last_logged_error:
+                    logger.warning("sync loop error: %s (retrying in 15s)", e)
+                else:
+                    logger.debug("sync loop error (repeat): %s", e)
+                failing = True
+                last_logged_error = str(e)
                 delay = 15.0
             self._stop.wait(delay)
 
 
 class FleetTracker:
-    """In-memory record of slave IPs that have polled recently. No persistence."""
+    """In-memory record of slave IPs (and their reported code version) that have
+    polled recently. No persistence."""
 
     def __init__(self) -> None:
-        self._seen: dict[str, float] = {}
+        # ip -> (last_seen_epoch, reported_version_or_None)
+        self._seen: dict[str, tuple[float, Optional[str]]] = {}
         self._lock = threading.Lock()
 
-    def record(self, ip: str, now: float, ttl: float = 3600.0) -> None:
+    def record(self, ip: str, now: float, version: Optional[str] = None,
+               ttl: float = 3600.0) -> None:
         with self._lock:
-            self._seen[ip] = now
+            is_new = ip not in self._seen
+            # Overwrite, so an upgraded slave's new version replaces the old one
+            # on its next poll rather than pinning the first-seen value.
+            self._seen[ip] = (now, version)
             # Bound the dict: drop IPs unseen for an hour (far beyond the 5-min
             # "recent" window) so a long-lived master doesn't accumulate one
             # entry per DHCP lease forever.
             if len(self._seen) > 1:
-                self._seen = {k: t for k, t in self._seen.items()
-                              if now - t <= ttl}
+                self._seen = {k: v for k, v in self._seen.items()
+                              if now - v[0] <= ttl}
+        # Log outside the lock. Only the first poll from an IP logs (until it's
+        # pruned after an hour idle), so a steadily-polling fleet stays quiet.
+        if is_new:
+            logger.info("screen checked in: %s", ip)
 
-    def recent(self, now: float, window: float = 300.0) -> list[str]:
+    def recent(self, now: float, window: float = 300.0) -> list[dict]:
         with self._lock:
-            return sorted(ip for ip, ts in self._seen.items()
-                          if now - ts <= window)
+            seen = [(ip, ver) for ip, (ts, ver) in self._seen.items()
+                    if now - ts <= window]
+        return [{"ip": ip, "version": ver} for ip, ver in sorted(seen)]

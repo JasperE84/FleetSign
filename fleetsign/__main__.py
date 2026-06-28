@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import signal
 import tempfile
 from pathlib import Path
 
 from .config import AppConfig
+from .logsetup import configure_logging
 from .player import PlayerController
 from .store import PlaylistStore
 from .sync import SyncClient
@@ -41,6 +43,11 @@ def serve_kwargs(config: AppConfig) -> dict:
 
 
 def main() -> None:
+    # Configure logging first thing (main() only, like tempfile.tempdir below) so
+    # everything from config load onward lands in journald at the right level.
+    configure_logging()
+    log = logging.getLogger("fleetsign")
+
     parser = argparse.ArgumentParser(description="FleetSign daemon")
     parser.add_argument("--root", default=os.environ.get("FLEETSIGN_ROOT", "."))
     parser.add_argument("--host", default=os.environ.get("FLEETSIGN_HOST", "0.0.0.0"))
@@ -52,16 +59,28 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=port_default)
     args = parser.parse_args()
 
-    app, controller, config, sync = build(Path(args.root).resolve(), args.host, args.port)
+    root = Path(args.root).resolve()
+    app, controller, config, sync = build(root, args.host, args.port)
+    role = "slave" if config.is_slave() else "master"
+    log.info("FleetSign starting: role=%s root=%s serving http://%s:%d",
+             role, root, config.host, config.port)
     # Route large multipart upload temp files onto the data filesystem (not a
     # tmpfs /tmp), so a 250 MB+ upload can't exhaust RAM and the final save is a
     # same-filesystem move. Done only in main(), never in build(), so tests that
     # call build() don't mutate the global temp dir.
     tempfile.tempdir = str(config.data_dir)
+
     # Register the shutdown handler before starting the controller so a SIGTERM
     # during startup still stops mpv cleanly. shutdown() joins the player thread
-    # and tears down mpv synchronously before exit.
-    signal.signal(signal.SIGTERM, lambda *_: (controller.shutdown(), os._exit(0)))
+    # and tears down mpv synchronously before exit. (A single log line from a
+    # signal handler has a tiny reentrancy risk, but this daemon's log volume
+    # makes interrupting an in-progress emit effectively impossible.)
+    def _on_sigterm(*_):
+        log.info("SIGTERM received; shutting down")
+        controller.shutdown()
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
     controller.start()
     if sync is not None:
         sync.start()

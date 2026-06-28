@@ -21,6 +21,14 @@
       <p class="hint">Items: {{ item_count }} ·
         Last sync: <span id="lastsync">{{ last_sync or 'never' }}</span>
       </p>
+      <p class="hint">This screen: <strong>v{{ app_version }}</strong>{% if master_version %} · Master: <strong>v{{ master_version }}</strong>{% endif %}</p>
+      {% if version_mismatch %}
+      <div class="warn-banner">
+        ⚠ Version mismatch — this screen runs v{{ app_version }} but the master
+        runs v{{ master_version }}. Update them to the same version (a master
+        upgrade doesn't update its screens automatically).
+      </div>
+      {% endif %}
       {% if last_error %}
       <div class="warn-banner">
         ⚠ Sync error{% if last_error_friendly %} — {{ last_error_friendly }}{% endif %}
@@ -62,6 +70,7 @@
   function refreshStatus() {
     fetch("{{ url_for('status') }}").then(function (r) { return r.json(); }).then(function (s) {
       var txt = s.now + "  ·  " + s.weekday + ", " + s.tz;
+      if (s.version_mismatch) txt += "  ·  VERSION MISMATCH";
       if (s.last_error) txt += "  ·  " + (s.last_error_friendly || "SYNC ERROR");
       document.getElementById("status").textContent = txt;
       if (s.last_sync_text) document.getElementById("lastsync").textContent = s.last_sync_text;

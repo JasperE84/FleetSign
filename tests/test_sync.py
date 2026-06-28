@@ -1,8 +1,11 @@
 import json
+import logging
+import urllib.request
+from fleetsign import __version__
 from fleetsign.store import PlaylistStore
 from fleetsign.sync import (manifest_payload, FleetTracker, SyncClient,
                             SyncError, SyncResult, _base_url,
-                            friendly_sync_error)
+                            friendly_sync_error, urllib_fetch, version_mismatch)
 
 
 def make_store(tmp_path):
@@ -47,15 +50,41 @@ def test_fleet_recent_window():
     f = FleetTracker()
     f.record("1.1.1.1", 1000.0)
     f.record("2.2.2.2", 1400.0)
-    assert f.recent(1500.0, window=300.0) == ["2.2.2.2"]   # 1.1.1.1 is 500s old
-    assert f.recent(1500.0, window=600.0) == ["1.1.1.1", "2.2.2.2"]
+    # recent() returns {"ip", "version"} dicts; check the ips it includes.
+    assert [s["ip"] for s in f.recent(1500.0, window=300.0)] == ["2.2.2.2"]
+    assert [s["ip"] for s in f.recent(1500.0, window=600.0)] == ["1.1.1.1", "2.2.2.2"]
 
 
 def test_fleet_record_updates_timestamp():
     f = FleetTracker()
     f.record("9.9.9.9", 1000.0)
     f.record("9.9.9.9", 1490.0)  # same ip, refreshed
-    assert f.recent(1500.0, window=300.0) == ["9.9.9.9"]
+    assert [s["ip"] for s in f.recent(1500.0, window=300.0)] == ["9.9.9.9"]
+
+
+def test_fleet_records_and_returns_version():
+    # A slave reports its code version via the X-Sync-Version header; the master
+    # surfaces it in the screens panel so version skew is visible.
+    f = FleetTracker()
+    f.record("1.2.3.4", 1000.0, version="0.2.0")
+    assert f.recent(1100.0) == [{"ip": "1.2.3.4", "version": "0.2.0"}]
+
+
+def test_fleet_version_updates_on_repoll():
+    # When a slave is upgraded, its next poll carries the new version and the
+    # master's view updates rather than pinning the first-seen version.
+    f = FleetTracker()
+    f.record("1.2.3.4", 1000.0, version="0.1.0")
+    f.record("1.2.3.4", 1050.0, version="0.2.0")
+    assert f.recent(1100.0) == [{"ip": "1.2.3.4", "version": "0.2.0"}]
+
+
+def test_fleet_records_missing_version_as_none():
+    # An old slave (or any client) that sends no version is still listed, with a
+    # None version the UI renders as unknown — never a false "mismatch".
+    f = FleetTracker()
+    f.record("1.2.3.4", 1000.0)
+    assert f.recent(1100.0) == [{"ip": "1.2.3.4", "version": None}]
 
 
 def test_base_url_adds_scheme_and_default_port_when_missing():
@@ -397,7 +426,7 @@ def test_fleet_evicts_entries_older_than_an_hour():
     f.record("1.1.1.1", 0.0)
     f.record("2.2.2.2", 4000.0)  # >1h later: 1.1.1.1 should be evicted
     # Even with an enormous window, the long-stale IP is gone from the dict.
-    assert f.recent(4000.0, window=1e9) == ["2.2.2.2"]
+    assert [s["ip"] for s in f.recent(4000.0, window=1e9)] == ["2.2.2.2"]
 
 
 def test_truncated_download_is_rejected(tmp_path):
@@ -656,3 +685,136 @@ def test_non_dict_settings_skips(tmp_path):
         assert res.ok is False
         assert store.list_media() == []  # store not mutated
         # must not raise
+
+
+def test_sync_once_reports_changed_flag(tmp_path):
+    # `changed` lets the loop log a meaningful "synced" line even when nothing was
+    # downloaded (a reorder/schedule change rewrites the manifest but no files).
+    store, media = make_store(tmp_path)
+    p = payload_for([ITEM_A], {"a.png": {"size": 3, "mtime": 1000.0}})
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {"a.png": b"abc"}))
+    assert client.sync_once().changed is True     # first apply
+    assert client.sync_once().changed is False    # identical payload -> no change
+
+
+def test_fleet_record_logs_new_ip_once(caplog):
+    f = FleetTracker()
+    with caplog.at_level(logging.INFO, logger="fleetsign.sync"):
+        f.record("5.5.5.5", 1000.0)
+        f.record("5.5.5.5", 1001.0)   # same ip again -> no second check-in line
+    checkins = [r for r in caplog.records if "checked in" in r.getMessage()]
+    assert len(checkins) == 1
+    assert "5.5.5.5" in checkins[0].getMessage()
+
+
+def test_log_result_info_on_change_debug_when_idle(tmp_path, caplog):
+    store, media = make_store(tmp_path)
+    client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
+    with caplog.at_level(logging.DEBUG, logger="fleetsign.sync"):
+        client._log_result(SyncResult(ok=True, downloaded=2, pruned=1))
+        client._log_result(SyncResult(ok=True, changed=True))   # applied, no files
+        client._log_result(SyncResult(ok=True))                 # nothing changed
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    debugs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("2 downloaded, 1 pruned" in m for m in infos)
+    assert any("playlist/settings updated" in m for m in infos)
+    assert any("no changes" in m for m in debugs)
+
+
+def test_run_warns_once_on_repeated_failure_then_logs_recovery(tmp_path, caplog):
+    # A master down for hours must not spam a WARNING every 15 s: warn on the
+    # first failure, drop repeats of the same error to DEBUG, and log recovery
+    # once when it succeeds again.
+    store, media = make_store(tmp_path)
+    client = SyncClient(store, cfg(), fetch=lambda u, t: b"{}")
+    client._rng = lambda a, b: 0.0
+    client._stop.wait = lambda d: None     # don't actually sleep the backoff
+    results = [SyncResult(ok=False, error="boom"),
+               SyncResult(ok=False, error="boom"),
+               SyncResult(ok=True)]
+
+    def fake_once():
+        res = results.pop(0)
+        if not results:
+            client.stop()                  # stop after the final (success) result
+        return res
+
+    client.sync_once = fake_once           # type: ignore[assignment]
+    with caplog.at_level(logging.DEBUG, logger="fleetsign.sync"):
+        client._run()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "sync failed" in warnings[0].getMessage()
+    assert any("still failing" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.DEBUG)
+    assert any("recovered" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.INFO)
+
+
+def test_manifest_payload_includes_version(tmp_path):
+    # The master advertises its code version so a slave (and the slave's UI) can
+    # tell when the two have drifted out of lockstep.
+    store, media = make_store(tmp_path)
+    assert manifest_payload(store)["version"] == __version__
+
+
+def test_sync_captures_master_version(tmp_path):
+    store, media = make_store(tmp_path)
+    p = payload_for([], {})
+    p["version"] = "9.9.9"
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {}))
+    res = client.sync_once()
+    assert res.ok is True
+    assert client.master_version == "9.9.9"
+
+
+def test_sync_without_version_leaves_master_version_none(tmp_path):
+    # An older master that doesn't advertise a version must still sync cleanly;
+    # the slave simply can't report the master's version.
+    store, media = make_store(tmp_path)
+    p = payload_for([], {})  # no version key
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {}))
+    res = client.sync_once()
+    assert res.ok is True
+    assert client.master_version is None
+
+
+def test_sync_ignores_non_string_version(tmp_path):
+    store, media = make_store(tmp_path)
+    p = payload_for([], {})
+    p["version"] = 5  # not a string -> ignored, never coerced
+    client = SyncClient(store, cfg(), fetch=make_fetch(p, {}))
+    client.sync_once()
+    assert client.master_version is None
+
+
+def test_urllib_fetch_sends_token_and_version(monkeypatch):
+    # The real HTTP client identifies itself with both the auth token and its
+    # code version, so the master's screens panel can show each slave's version.
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"ok"
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    out = urllib_fetch("http://m/sync/manifest", "tok")
+    assert out == b"ok"
+    # urllib stores header keys capitalised (X-Sync-Token -> X-sync-token).
+    assert captured["req"].get_header("X-sync-token") == "tok"
+    assert captured["req"].get_header("X-sync-version") == __version__
+
+
+def test_version_mismatch_helper():
+    # True only when the master's version is known AND differs from ours, so an
+    # unknown master version (old master / never synced) never reads as a clash.
+    assert version_mismatch(None) is False
+    assert version_mismatch("") is False
+    assert version_mismatch(__version__) is False
+    assert version_mismatch("999.0.0") is True
+    assert version_mismatch("0.1.0", "0.2.0") is True

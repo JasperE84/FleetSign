@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import signal
@@ -12,11 +13,15 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                    request, send_from_directory, session, url_for)
 from werkzeug.utils import secure_filename
 
+logger = logging.getLogger(__name__)
+
+from . import __version__
 from .config import AppConfig
 from .model import HWDEC_CHOICES, Schedule, is_supported
 from .schedule import parse_hhmm
 from .store import PlaylistStore
-from .sync import FleetTracker, friendly_sync_error, manifest_payload
+from .sync import (FleetTracker, friendly_sync_error, manifest_payload,
+                   version_mismatch)
 from .validate import positive_seconds as _positive_seconds
 
 MAX_UPLOAD_BYTES = 4 * 1024**3  # 4 GiB — accept large videos (well over 250 MB)
@@ -113,6 +118,8 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
                 else:
                     config.set_password(pw)
                     session["authed"] = True
+                    logger.info("initial admin password set from %s",
+                                request.remote_addr)
                     return redirect(url_for("index"))
         return render_template("setup.html")
 
@@ -126,8 +133,10 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
         if request.method == "POST":
             if config.check_password(request.form.get("password", "")):
                 session["authed"] = True
+                logger.info("login ok from %s", request.remote_addr)
                 return redirect(url_for("index"))
             time.sleep(1.0)
+            logger.warning("failed login from %s", request.remote_addr)
             flash("Wrong password.")
         return render_template("login.html")
 
@@ -144,6 +153,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
                                settings=store.get_settings(),
                                missing=store.missing_files(),
                                screens=fleet.recent(time.time()),
+                               app_version=__version__,
                                sync_token=config.sync_token)
 
     @app.route("/upload", methods=["POST"])
@@ -154,11 +164,13 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
                 continue
             name = secure_filename(f.filename)
             if not name or not is_supported(name):
+                logger.warning("skipped unsupported upload: %s", f.filename)
                 flash(f"Skipped unsupported file: {f.filename}")
                 continue
             dest = unique_path(store.media_dir, name)
             f.save(dest)
             store.add_media(dest.name)
+            logger.info("uploaded %s (%d bytes)", dest.name, dest.stat().st_size)
         return redirect(url_for("index"))
 
     @app.route("/media/<item_id>/enable", methods=["POST"])
@@ -207,6 +219,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
     @login_required
     def delete(item_id):
         store.remove_media(item_id)
+        logger.info("deleted media %s", item_id)
         return redirect(url_for("index"))
 
     @app.route("/media-file/<path:name>")
@@ -217,7 +230,8 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
     @app.route("/sync/manifest")
     def sync_manifest():
         _check_sync_token()
-        fleet.record(request.remote_addr or "?", time.time())
+        fleet.record(request.remote_addr or "?", time.time(),
+                     version=request.headers.get("X-Sync-Version"))
         payload = manifest_payload(store)
         # The UI password (a hash) rides along so slaves can require the same
         # login. This human-facing credential is distinct from the sync token
@@ -228,7 +242,8 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
     @app.route("/sync/media/<path:name>")
     def sync_media(name):
         _check_sync_token()
-        fleet.record(request.remote_addr or "?", time.time())
+        fleet.record(request.remote_addr or "?", time.time(),
+                     version=request.headers.get("X-Sync-Version"))
         return send_from_directory(store.media_dir, name)
 
     @app.route("/settings", methods=["POST"])
@@ -244,6 +259,8 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
         store.set_settings(duration, request.form.get("muted") == "1", hwdec)
         if hwdec != old.hwdec:
             controller.restart_playback()  # relaunch mpv with the new decoder
+            logger.info("hwdec changed %s -> %s; relaunching playback",
+                        old.hwdec, hwdec)
             flash("Video decoder changed — playback restarted.")
         return redirect(url_for("index"))
 
@@ -251,6 +268,8 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
     @login_required
     def restart_playback():
         controller.restart_playback()
+        logger.info("operator requested playback restart from %s",
+                    request.remote_addr)
         flash("Playback restarted.")
         return redirect(url_for("index"))
 
@@ -281,6 +300,7 @@ def create_app(store: PlaylistStore, config: AppConfig, controller,
         pw = request.form.get("password", "")
         if len(pw) >= 4:
             config.set_password(pw)
+            logger.info("UI password updated from %s", request.remote_addr)
             flash("Password updated.")
         else:
             flash("Password too short.")
@@ -363,8 +383,10 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
         if request.method == "POST":
             if config.check_password(request.form.get("password", "")):
                 session["authed"] = True
+                logger.info("login ok from %s", request.remote_addr)
                 return redirect(url_for("index"))
             time.sleep(1.0)
+            logger.warning("failed login from %s", request.remote_addr)
             flash("Wrong password.")
         return render_template("login.html")
 
@@ -385,7 +407,11 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
                                last_attempt=_fmt_ts(sync_client.last_attempt),
                                last_error=sync_client.last_error,
                                last_error_friendly=friendly_sync_error(
-                                   sync_client.last_error))
+                                   sync_client.last_error),
+                               app_version=__version__,
+                               master_version=sync_client.master_version,
+                               version_mismatch=version_mismatch(
+                                   sync_client.master_version))
 
     @app.route("/local/hwdec", methods=["POST"])
     @login_required
@@ -394,6 +420,7 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
         s = store.get_settings()
         store.set_settings(s.default_image_duration, s.muted, hwdec)
         controller.restart_playback()
+        logger.info("local hwdec changed to %s; relaunching playback", hwdec)
         flash("Decoder changed — playback restarted.")
         return redirect(url_for("index"))
 
@@ -427,6 +454,9 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
             "last_sync_text": _fmt_ts(sync_client.last_sync),
             "last_error": sync_client.last_error,
             "last_error_friendly": friendly_sync_error(sync_client.last_error),
+            "app_version": __version__,
+            "master_version": sync_client.master_version,
+            "version_mismatch": version_mismatch(sync_client.master_version),
         })
 
     return app

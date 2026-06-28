@@ -80,11 +80,37 @@ systemctl --user status fleetsign         # is it running?
 systemctl --user restart fleetsign        # restart the whole daemon
 systemctl --user stop fleetsign           # stop it
 journalctl --user -u fleetsign -f         # live logs (errors, mpv relaunches)
+journalctl --user -u fleetsign -p warning # only warnings and errors
 ```
 
 The daemon self-heals on two levels: systemd restarts it if the process dies
 (`Restart=always`), and the daemon restarts mpv if mpv dies. You should not need
 to babysit it.
+
+### Log verbosity
+
+The daemon logs to the journal at **INFO** by default — startup, the master/slave
+role, mpv launches/relaunches, maintenance and blank toggles, uploads, logins,
+sync results, and corrupt-manifest/sync warnings. Because levels are tagged
+(`-p warning`, `-p err`) you can filter to just the problems.
+
+To see much more (per-item playback, "no changes" syncs, repeated errors), raise
+the level to **debug** via an environment variable:
+
+```bash
+systemctl --user edit fleetsign           # opens a drop-in override
+# add these two lines, save, and exit:
+#   [Service]
+#   Environment=FLEETSIGN_LOG_LEVEL=debug
+systemctl --user restart fleetsign        # apply
+journalctl --user -u fleetsign -f         # watch the verbose logs
+```
+
+(Alternatively, uncomment the `Environment=FLEETSIGN_LOG_LEVEL=debug` line in
+`systemd/fleetsign.service` before installing.) Valid levels are `debug`, `info`,
+`warning`, `error`; an unrecognised value falls back to `info`. Set it back to
+`info` (or remove the override) once you're done — debug is chatty on short image
+durations.
 
 ## Verify the install (manual, on the Pi)
 

@@ -1,4 +1,5 @@
 import json
+import logging
 from fleetsign.store import PlaylistStore
 from fleetsign.model import MediaItem
 
@@ -47,6 +48,19 @@ def test_corrupt_manifest_recovers(tmp_path):
     store = PlaylistStore(tmp_path / "manifest.json", media)
     assert store.list_media() == []
     assert json.loads((tmp_path / "manifest.json").read_text("utf-8"))["media"] == []
+
+
+def test_corrupt_manifest_logs_warning(tmp_path, caplog):
+    # The recovery used to be silent — an operator chasing a reset playlist had
+    # nothing in journalctl. It must now warn (and name the backup).
+    media = tmp_path / "media"; media.mkdir()
+    (tmp_path / "manifest.json").write_text("{ not json", "utf-8")
+    with caplog.at_level(logging.WARNING, logger="fleetsign.store"):
+        PlaylistStore(tmp_path / "manifest.json", media)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "corrupt" in warnings[0].getMessage()
+    assert "backed up to" in warnings[0].getMessage()
 
 
 def test_mistyped_manifest_recovers(tmp_path):

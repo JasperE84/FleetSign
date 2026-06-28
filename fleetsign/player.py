@@ -15,6 +15,8 @@ from .mpv_ipc import MpvIpc, connect_unix
 from .schedule import is_active
 from .store import PlaylistStore
 
+logger = logging.getLogger(__name__)
+
 # The single mpv key binding for maintenance; with --no-input-default-bindings this
 # is the only key mpv reacts to. F12 (a bare function key) is used rather than a
 # Ctrl+Alt combo because the Pi's labwc compositor grabs Ctrl+Alt+<key> for screen
@@ -161,14 +163,14 @@ class ForegroundGuard:
             # so a fresh mpv has time to map before this would warn.
             if not self._warned_missing:
                 self._warned_missing = True
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     "ForegroundGuard cannot find the mpv window (xdotool/wmctrl "
                     "installed? signage window mapped under XWayland?); "
                     "always-on-top is not being enforced")
             return
         if self._warned_missing:
             self._warned_missing = False
-            logging.getLogger(__name__).info(
+            logger.info(
                 "ForegroundGuard reacquired the mpv window; always-on-top resumed")
         wid_text = str(wid)
         wid_hex = f"0x{wid:x}"
@@ -226,6 +228,9 @@ class PlayerController:
         self._last_id: Optional[str] = None
         self._blank = False
         self._maintenance = False
+        # Latches the "nothing to play" state so a black/idle screen is logged
+        # once on entry (and once on recovery), not every 1 s loop iteration.
+        self._idle_logged = False
         self._stop = threading.Event()
         self._restart = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -253,6 +258,8 @@ class PlayerController:
         return self._maintenance
 
     def set_blank(self, blank: bool) -> None:
+        if blank != self._blank:
+            logger.info("display %s", "blanked" if blank else "unblanked")
         self._blank = blank
         if blank and self._ipc:
             try:
@@ -264,6 +271,8 @@ class PlayerController:
         was = self._maintenance
         self._maintenance = on
         if on:
+            if not was:
+                logger.info("maintenance mode entered")
             # Enter: drop the live mpv out of fullscreen, clear always-on-top, and
             # pause it so the operator can both reach and see the desktop. Without
             # clearing ontop the windowed mpv would keep floating above everything.
@@ -277,6 +286,7 @@ class PlayerController:
                 except Exception:
                     pass
         elif was:
+            logger.info("exiting maintenance; relaunching mpv")
             # Exit, but only on a real True->False transition. "Resume signage" is
             # always shown in the UI, so a stray click or duplicate POST while
             # already playing must NOT relaunch mpv and needlessly black/restart the
@@ -322,7 +332,7 @@ class PlayerController:
                     try:
                         self._proc.wait(timeout=2.0)
                     except subprocess.TimeoutExpired:
-                        logging.getLogger(__name__).warning(
+                        logger.warning(
                             "mpv did not exit after SIGKILL; relaunch may briefly "
                             "overlap a stale window")
             except Exception:
@@ -339,6 +349,11 @@ class PlayerController:
 
     def _ensure_mpv(self) -> None:
         if self._proc is None or self._proc.poll() is not None:
+            # A surviving _proc whose poll() is non-None means mpv exited on its
+            # own (a clean teardown nulls _proc first), i.e. the self-healing
+            # relaunch path — worth a WARNING. A None _proc is a normal launch
+            # (boot, or after a deliberate teardown for restart/hwdec change).
+            crashed_rc = self._proc.poll() if self._proc is not None else None
             if self._ipc is not None:
                 try:
                     self._ipc.close()
@@ -346,8 +361,13 @@ class PlayerController:
                     pass
                 self._ipc = None
             self._write_input_conf()
-            self._proc = self._launcher(self.socket_path, self._input_conf,
-                                        self.store.get_settings().hwdec)
+            hwdec = self.store.get_settings().hwdec
+            if crashed_rc is not None:
+                logger.warning(
+                    "mpv exited unexpectedly (returncode=%s); relaunching", crashed_rc)
+            else:
+                logger.info("launching mpv (hwdec=%s)", hwdec)
+            self._proc = self._launcher(self.socket_path, self._input_conf, hwdec)
             self._ipc = self._connector(self.socket_path)
             self._maintenance = False
             self._foreground_guard.reset()
@@ -382,6 +402,7 @@ class PlayerController:
                     # clear always-on-top so the windowed mpv stops covering the
                     # desktop, and pause. (Exiting relaunches a fresh mpv, which
                     # comes back fullscreen + --ontop, so no live restore here.)
+                    logger.info("maintenance mode entered (F12)")
                     try:
                         self._ipc.command("set_property", "ontop", False)
                         self._ipc.command("set_property", "pause", maint)
@@ -391,11 +412,13 @@ class PlayerController:
                     # Exited (F12 back to fullscreen): relaunch fresh rather than
                     # reusing the just-recreated window — same loadfile-mid-recreation
                     # hang as the web Resume path. See set_maintenance().
+                    logger.info("exiting maintenance (F12); relaunching mpv")
                     self.restart_playback()
         return ev
 
     def _play_item(self, item: MediaItem) -> None:
         settings = self.store.get_settings()
+        logger.debug("playing %s (%s)", item.filename, item.type)
         # Set options as PROPERTIES before loadfile rather than as positional
         # loadfile options: mpv >= 0.38 inserted an <index> arg before <options>
         # in loadfile, which would silently drop positional options. Properties
@@ -457,15 +480,21 @@ class PlayerController:
                     not self._maintenance and not self._blank and self._proc is not None)
                 item = select_next(self.store.list_media(), self._clock(), self._last_id)
                 if item is None:
+                    if not self._idle_logged:
+                        self._idle_logged = True
+                        logger.info("no active media to play; screen is idle")
                     self._stop.wait(1.0)
                     continue
                 self._last_id = item.id
                 if not (self.store.media_dir / item.filename).exists():
                     self._stop.wait(1.0)
                     continue
+                if self._idle_logged:
+                    self._idle_logged = False
+                    logger.info("active media available; resuming playback")
                 self._play_item(item)
             except Exception:
-                logging.getLogger(__name__).exception("player loop error")
+                logger.exception("player loop error")
                 self._teardown_mpv()
                 self._stop.wait(1.0)
         self._teardown_mpv()

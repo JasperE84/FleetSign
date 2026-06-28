@@ -37,6 +37,23 @@ def test_panel_lists_recent_screen_ip(tmp_path):
     assert "127.0.0.1" in c.get("/").get_data(as_text=True)  # recorded by /sync/*
 
 
+def test_panel_shows_screen_version(tmp_path):
+    # A slave reports its version via X-Sync-Version; the panel surfaces it so the
+    # operator can spot a screen that was missed during an upgrade.
+    c, config, _ = make_app(tmp_path)
+    c.get("/sync/manifest", headers={"X-Sync-Token": config.sync_token,
+                                     "X-Sync-Version": "0.9.9"})
+    c.post("/login", data={"password": "pw"})
+    assert "0.9.9" in c.get("/").get_data(as_text=True)
+
+
+def test_panel_shows_master_version(tmp_path):
+    from fleetsign import __version__
+    c, config, _ = make_app(tmp_path)
+    c.post("/login", data={"password": "pw"})
+    assert f"v{__version__}" in c.get("/").get_data(as_text=True)
+
+
 def test_sync_token_update(tmp_path):
     c, config, _ = make_app(tmp_path)
     c.post("/login", data={"password": "pw"})
