@@ -41,6 +41,24 @@
 
     <div class="grid2">
       <section class="card">
+        <h2>Controls</h2>
+        <div class="row">
+          <form method="post" action="{{ url_for('restart_playback') }}"><button class="ghost" type="submit">Restart playback</button></form>
+          <form method="post" action="{{ url_for('blank') }}"><input type="hidden" name="blank" value="1"><button class="ghost" type="submit">Blank screen</button></form>
+          <form method="post" action="{{ url_for('blank') }}"><input type="hidden" name="blank" value="0"><button class="ghost" type="submit">Resume</button></form>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Maintenance</h2>
+        <div class="row">
+          <form method="post" action="{{ url_for('maintenance') }}"><input type="hidden" name="on" value="1"><button class="ghost" type="submit">Enter maintenance</button></form>
+          <form method="post" action="{{ url_for('maintenance') }}"><input type="hidden" name="on" value="0"><button class="ghost" type="submit">Resume signage</button></form>
+        </div>
+        <p class="hint">Or press <strong>F12</strong> on the Pi to toggle. A reboot always returns to fullscreen.</p>
+      </section>
+
+      <section class="card">
         <h2>Video decoder (local to this Pi)</h2>
         <form class="row" method="post" action="{{ url_for('local_hwdec') }}">
           <select name="hwdec">
@@ -70,6 +88,8 @@
   function refreshStatus() {
     fetch("{{ url_for('status') }}").then(function (r) { return r.json(); }).then(function (s) {
       var txt = s.now + "  ·  " + s.weekday + ", " + s.tz;
+      if (s.maintenance) txt += "  ·  MAINTENANCE";
+      if (s.blank) txt += "  ·  BLANKED";
       if (s.version_mismatch) txt += "  ·  VERSION MISMATCH";
       if (s.last_error) txt += "  ·  " + (s.last_error_friendly || "SYNC ERROR");
       document.getElementById("status").textContent = txt;

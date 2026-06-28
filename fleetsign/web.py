@@ -447,11 +447,38 @@ def create_slave_app(store: PlaylistStore, config: AppConfig, controller,
         return ("Becoming master — the device will restart. "
                 "Browse to it to manage content."), 200
 
+    # Local playback controls — a screen runs the identical PlayerController, so
+    # these act on its own display only (no fleet/sync effect). Mirror the
+    # master's routes verbatim, including endpoint names, so the shared template
+    # markup's url_for() calls are identical on both apps.
+    @app.route("/control/restart-playback", methods=["POST"])
+    @login_required
+    def restart_playback():
+        controller.restart_playback()
+        logger.info("operator requested playback restart from %s",
+                    request.remote_addr)
+        flash("Playback restarted.")
+        return redirect(url_for("index"))
+
+    @app.route("/control/blank", methods=["POST"])
+    @login_required
+    def blank():
+        controller.set_blank(request.form.get("blank") == "1")
+        return redirect(url_for("index"))
+
+    @app.route("/control/maintenance", methods=["POST"])
+    @login_required
+    def maintenance():
+        controller.set_maintenance(request.form.get("on") == "1")
+        return redirect(url_for("index"))
+
     @app.route("/status")
     @login_required
     def status():
         return jsonify({
             **_clock_status(),
+            "maintenance": controller.is_maintenance(),
+            "blank": controller.is_blank(),
             "item_count": len(store.list_media()),
             "last_sync": sync_client.last_sync,
             "last_sync_text": _fmt_ts(sync_client.last_sync),

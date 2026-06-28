@@ -7,10 +7,12 @@ from fleetsign.web import create_slave_app
 
 class RecordingController:
     def __init__(self):
-        self.restarted = False
+        self.restarted = False; self.blank = None; self.maint = False
     def restart_playback(self): self.restarted = True
-    def is_maintenance(self): return False
-    def is_blank(self): return False
+    def set_blank(self, blank): self.blank = blank
+    def set_maintenance(self, on): self.maint = on
+    def is_maintenance(self): return self.maint
+    def is_blank(self): return bool(self.blank)
 
 
 def _build_slave(tmp_path, *, with_password=True):
@@ -206,3 +208,48 @@ def test_slave_become_master_restarts(slave):
     assert r.status_code == 200
     assert config.is_slave() is False
     assert called == [1]
+
+
+def test_slave_controls_call_controller(slave):
+    # Same local playback controls the master exposes: a screen's own display can
+    # be restarted/blanked from its UI (it runs the identical PlayerController).
+    c, _, _, ctrl, _ = slave
+    c.post("/control/restart-playback")
+    c.post("/control/blank", data={"blank": "1"})
+    assert ctrl.restarted is True and ctrl.blank is True
+    c.post("/control/blank", data={"blank": "0"})
+    assert ctrl.blank is False
+
+
+def test_slave_maintenance_toggle_calls_controller(slave):
+    c, _, _, ctrl, _ = slave
+    c.post("/control/maintenance", data={"on": "1"})
+    assert ctrl.maint is True
+    c.post("/control/maintenance", data={"on": "0"})
+    assert ctrl.maint is False
+
+
+def test_slave_controls_require_login(tmp_path):
+    # The control routes are login-gated like every other slave management route.
+    c, store, config, ctrl, called = _build_slave(tmp_path)  # NOT logged in
+    assert c.post("/control/restart-playback",
+                  follow_redirects=False).status_code == 302  # -> /login
+    assert c.post("/control/maintenance", data={"on": "1"},
+                  follow_redirects=False).status_code == 302
+    assert ctrl.restarted is False and ctrl.maint is False
+
+
+def test_slave_status_includes_playback_state(slave):
+    c, _, _, ctrl, _ = slave
+    ctrl.set_maintenance(True)
+    ctrl.set_blank(True)
+    data = c.get("/status").get_json()
+    assert data["maintenance"] is True
+    assert data["blank"] is True
+
+
+def test_slave_index_shows_control_buttons(slave):
+    c, *_ = slave
+    body = c.get("/").get_data(as_text=True)
+    assert "Restart playback" in body
+    assert "Enter maintenance" in body
