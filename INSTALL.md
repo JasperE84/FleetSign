@@ -12,7 +12,10 @@ never touches the console.
 - Network access (Ethernet or Wi-Fi). The Pi reaches the web UI over the LAN, and
   — because the Pi has no battery-backed clock — it relies on the network to set
   the time at boot (time-of-day schedules depend on a correct clock).
-- `sudo` rights for the install (it installs system packages and a user service).
+- A login user **with `sudo` rights**. Run the installer **as that normal
+  desktop user, not with `sudo`** — it self-elevates for the `apt` step only;
+  everything else (the venv, the `--user` service, the labwc config) must be
+  owned by your desktop user.
 - Python 3.11+ (shipped with Bookworm).
 
 The installer pulls in the system dependencies, **mpv**, **xdotool**, and
@@ -20,11 +23,15 @@ The installer pulls in the system dependencies, **mpv**, **xdotool**, and
 
 ## Install
 
-1. Copy this project to `~/fleetsign` on the Pi (e.g. `git clone … ~/fleetsign`, or
-   `scp -r` the folder). The path **must** be `~/fleetsign` — the service unit and
-   installer assume it.
+1. Fetch this project to `~/fleetsign` on the Pi (or `scp -r` the folder). The
+   path **must** be `~/fleetsign` — the service unit and installer assume it.
 
-2. Run the installer:
+   ```bash
+   git clone https://github.com/JasperE84/FleetSign.git ~/fleetsign
+   ```
+
+2. Run the installer **as your normal desktop user** (not with `sudo` — it
+   self-elevates for the `apt` step only):
 
    ```bash
    bash ~/fleetsign/install.sh

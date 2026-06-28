@@ -8,6 +8,16 @@ set -euo pipefail
 # apt packages (mpv, python3-venv, xdotool, wmctrl) installed, since other
 # software may use them.
 
+# Run as the normal desktop user, the same as install.sh. This script only
+# touches per-user files (the --user unit, ~/.config/labwc, the venv); run as
+# root it would no-op on /root yet still print "Uninstalled", which is
+# misleading. Refuse instead.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "uninstall.sh: run as your normal desktop user, not root." >&2
+    echo "It only touches per-user files; as root it no-ops on /root." >&2
+    exit 1
+fi
+
 APP_DIR="$HOME/fleetsign"
 UNIT="$HOME/.config/systemd/user/fleetsign.service"
 LABWC_AUTOSTART="$HOME/.config/labwc/autostart"

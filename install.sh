@@ -3,6 +3,27 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Run as the normal desktop user, never as root. Everything except the apt-get
+# below is per-user — $HOME/fleetsign, the venv, ~/.config/systemd/user, the
+# labwc autostart/rc.xml, and `systemctl --user` all key off the invoking user.
+# Under `sudo install.sh`, $HOME is /root and systemctl --user targets root's
+# instance, so the whole install lands in the wrong place with no error. Refuse
+# rather than guess which user was meant.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "install.sh: run as your normal desktop user, not root (no sudo)." >&2
+    echo "It self-elevates for apt only. Re-run: bash ~/fleetsign/install.sh" >&2
+    exit 1
+fi
+
+# The only step needing root is the apt-get install below. Confirm this user can
+# sudo and prime the credential up front, so the password is asked once now
+# instead of pausing the install partway through.
+if ! command -v sudo >/dev/null 2>&1; then
+    echo "install.sh: sudo not found; it is needed to install system packages." >&2
+    exit 1
+fi
+sudo -v || { echo "install.sh: this user needs sudo rights to install packages." >&2; exit 1; }
+
 APP_DIR="$HOME/fleetsign"
 
 sudo apt-get update

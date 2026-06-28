@@ -161,8 +161,8 @@ Debian-family systems (see [Quick start](#quick-start)).
 *and* wires autostart through the Pi's default **labwc** compositor.
 
 ```bash
-git clone <this-repo> ~/fleetsign      # the path must be ~/fleetsign
-bash ~/fleetsign/install.sh
+git clone https://github.com/JasperE84/FleetSign.git ~/fleetsign   # the path must be ~/fleetsign
+bash ~/fleetsign/install.sh                                        # run as your normal desktop user — NOT with sudo
 ```
 
 The installer adds `mpv`, `xdotool`, and `wmctrl`, creates a virtualenv, installs
